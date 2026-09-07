@@ -169,7 +169,6 @@
   const initialParams = new URLSearchParams(location.search);
   let selectedCamera = $state<string>(initialParams.get("camera") ?? "combine");
   let selectedView = $state(initialParams.get("view") ?? "overlay");
-  let cacheBuster = $state(0);
   // The C++ side rewrites the debug images every debug_stream_interval_ms
   // (100 ms on this setup). Refreshing them once a second left the picture
   // visibly stale under an overlay that moves at the detection rate, so pull
@@ -189,6 +188,19 @@
   let camerasHttp = $state<CamerasPayload | null>(null);
   let fieldCanvas = $state<HTMLCanvasElement>();
   let overlayCanvas = $state<HTMLCanvasElement>();
+
+  // Last frame that finished loading, per camera and view. Deliberately not
+  // reactive: it is a render cache, read by the draw loop, and making it
+  // reactive would re-run every derived value on each arriving frame.
+  //
+  // Without it the <img> went blank between fetches - the source changes
+  // several times a second and each change restarts loading - and a failed
+  // or 404 fetch cleared the picture entirely. Holding the last good frame
+  // means the view degrades to "slightly stale" instead of "empty", and
+  // switching back to a view you have already seen paints instantly.
+  const frameCache: Record<string, HTMLImageElement> = {};
+  let inFlight = "";
+  let lastPump = 0;
 
   // Detections arrive per camera and each camera has its own frame counter,
   // so keep the newest frame from each rather than one shared slot. The
@@ -359,6 +371,10 @@
     const frame = $detectionPacket;
     if (frame?.camera_id === undefined) return;
     const stamp = Date.now();
+    // Tie the picture to the data: pull a new frame when a detection lands,
+    // not on an independent timer. Throttled to the rate the C++ side
+    // actually rewrites the files, so packets do not cause redundant fetches.
+    if (stamp - lastPump >= IMAGE_REFRESH_MS) pumpFrame();
     framesByCamera = { ...framesByCamera, [frame.camera_id]: frame };
     frameArrivedAt = { ...frameArrivedAt, [frame.camera_id]: stamp };
     lastUpdate = stamp;
@@ -388,7 +404,16 @@
   });
 
   $effect(() => {
-    void [overlayCanvas, selectedView, liveGeometry, cameraCalibration, visibleRobots, balls];
+    void [
+      overlayCanvas,
+      selectedView,
+      selectedCameraId,
+      liveGeometry,
+      cameraCalibration,
+      visibleRobots,
+      balls,
+      now,
+    ];
     drawFieldOverlay();
   });
 
@@ -397,6 +422,11 @@
   // first view this camera actually has.
   $effect(() => {
     if (isCombined) return;
+    // Until the snapshot list has loaded we do not know which views this
+    // camera has, and "not in the list" is indistinguishable from "list is
+    // empty". Resetting on that guess discarded a view chosen from the URL
+    // before the page had the information to judge it.
+    if (snapshots.length === 0) return;
     const available = cameraViews();
     if (!available.includes(selectedView)) {
       selectedView = available[0] ?? "overlay";
@@ -602,6 +632,13 @@
     return path.split("/").pop() ?? path;
   }
 
+  /** Gap between detection packets, which is what actually paces this page. */
+  function packetIntervalText(): string {
+    const rate = isCombined ? combined.fps : (selectedStatus?.fps ?? 0);
+    if (!Number.isFinite(rate) || rate <= 0) return "--";
+    return `${(1000 / rate).toFixed(1)} ms`;
+  }
+
   function clockText(stamp: number | null): string {
     if (!stamp) return "--";
     return new Date(stamp).toLocaleTimeString();
@@ -646,23 +683,31 @@
     return mine.sort((a, b) => ranked(a.view) - ranked(b.view));
   }
 
-  function currentSnapshot(): Snapshot | undefined {
-    return cameraSnapshots().find((snapshot) => snapshot.view === selectedView);
-  }
 
   /** Draw field geometry and the live detections over this camera's image,
    * in image pixels. This is the calibration check: if the drawn lines do not
    * sit on the painted ones, the geometry is wrong. */
   function drawFieldOverlay(): void {
     const canvas = overlayCanvas;
-    if (!canvas || isCombined || selectedView !== "overlay") return;
-    const width = valueNumber(cameraCalibration["pixel_image_width"], 768);
-    const height = valueNumber(cameraCalibration["pixel_image_height"], 432);
+    if (!canvas || isCombined) return;
+    const cached = frameCache[frameKey()];
+    // Size the canvas to the image so the overlay can stay in image pixels,
+    // which is the space the projection produces. CSS scales the result.
+    // naturalWidth is 0 for an image that has not decoded, so fall back on
+    // the calibrated size rather than sizing the canvas to nothing.
+    const cachedWidth = cached?.naturalWidth ?? 0;
+    const cachedHeight = cached?.naturalHeight ?? 0;
+    const width =
+      cachedWidth > 0 ? cachedWidth : valueNumber(cameraCalibration["pixel_image_width"], 768);
+    const height =
+      cachedHeight > 0 ? cachedHeight : valueNumber(cameraCalibration["pixel_image_height"], 432);
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d");
     if (!context) return;
     context.clearRect(0, 0, width, height);
+    if (cached) context.drawImage(cached, 0, 0, width, height);
+    if (selectedView !== "overlay") return;
     context.lineJoin = "round";
     context.lineCap = "round";
 
@@ -1180,15 +1225,51 @@
     history.replaceState(null, "", url.toString());
   }
 
+  function frameKey(): string {
+    const view = selectedView === "overlay" ? "raw" : selectedView;
+    return `${String(selectedCameraId)}/${view}`;
+  }
+
+  /** Fetch the next snapshot into the cache, off-screen.
+   *
+   * Loading into a detached Image and swapping only on success is what keeps
+   * the canvas from flickering: the visible frame is never the one currently
+   * being downloaded.
+   */
+  function pumpFrame(): void {
+    if (isCombined || selectedCameraId === null) return;
+    const key = frameKey();
+    if (inFlight === key) return;
+    inFlight = key;
+    lastPump = Date.now();
+    const image = new Image();
+    image.onload = () => {
+      frameCache[key] = image;
+      inFlight = "";
+    };
+    image.onerror = () => {
+      // Keep whatever we already had; a missed frame is not a reason to
+      // clear the view.
+      inFlight = "";
+    };
+    image.src = api(`/snapshot/${key}?t=${String(Date.now())}`);
+  }
+
   function refreshNow(): void {
     syncUrl();
-    cacheBuster = Date.now();
+    // Pull the new view's frame immediately. Waiting for the refresh timer
+    // meant a switch showed nothing for up to IMAGE_REFRESH_MS, which reads
+    // as the switch itself being slow.
+    pumpFrame();
     loadSnapshots();
     loadConfig();
     loadHealth();
     loadGeometry();
     loadField();
     loadCameras();
+    // Start the first frame now rather than waiting a refresh interval, so a
+    // page opened straight onto a camera is not blank for its first moment.
+    pumpFrame();
   }
 
   /** Reload the page without letting the browser reuse what it has cached.
@@ -1228,7 +1309,7 @@
     const camerasTimer = setInterval(loadCameras, 1000);
     const fieldTimer = setInterval(loadField, 1000);
     const imageTimer = setInterval(() => {
-      cacheBuster = Date.now();
+      pumpFrame();
     }, IMAGE_REFRESH_MS);
     const resize = () => {
       drawField();
@@ -1276,6 +1357,7 @@
       <span class="picker-label">Camera</span>
       <button
         class:active={isCombined}
+        aria-pressed={isCombined}
         onclick={() => {
           selectedCamera = "combine";
           refreshNow();
@@ -1286,6 +1368,7 @@
       {#each selectableCameraIds as id (id)}
         <button
           class:active={!isCombined && selectedCameraId === id}
+          aria-pressed={!isCombined && selectedCameraId === id}
           onclick={() => {
             selectedCamera = String(id);
             refreshNow();
@@ -1304,6 +1387,9 @@
     <span class="metric">
       {isCombined ? "Total rate" : "Camera rate"}
       <strong>{number(isCombined ? combined.fps : selectedStatus?.fps, 1)} fps</strong>
+    </span>
+    <span class="metric" title="Time between detection packets">
+      Packet interval <strong>{packetIntervalText()}</strong>
     </span>
     <span class:healthy={processingHealthy} class="status-badge">
       <span class="status-dot"></span>
@@ -1353,6 +1439,7 @@
           {#each cameraViews() as view (view)}
             <button
               class:active={!isCombined && view === selectedView}
+              aria-pressed={!isCombined && view === selectedView}
               disabled={selectableCameraIds.length === 0}
               title={isCombined
                 ? `Show ${viewLabel(view)} for camera ${String(selectableCameraIds[0] ?? 0)}`
@@ -1369,29 +1456,22 @@
         <div class="image-stage" class:field-stage={isCombined}>
           {#if isCombined}
             <canvas bind:this={fieldCanvas} aria-label="Top-down field view"></canvas>
-          {:else if selectedView === "overlay"}
-            <div class="overlay-stage">
-              <img
-                src={api(`/snapshot/${String(selectedCameraId)}/raw?t=${String(cacheBuster)}`)}
-                alt={`Camera ${String(selectedCameraId)} field overlay`}
-                onload={drawFieldOverlay}
-              />
-              <canvas bind:this={overlayCanvas} aria-label="Projected field geometry and detections"></canvas>
-              <div class="overlay-legend">
-                <span class="field-key">Field</span>
-                <span class="goal-key">Goals</span>
-                <span class="marking-key">Markings</span>
-                <span class="boundary-key">Boundary</span>
-                <span class="corner-key">Corners</span>
-              </div>
-            </div>
-          {:else if currentSnapshot()}
-            <img
-              src={api(`/snapshot/${String(selectedCameraId)}/${selectedView}?t=${String(cacheBuster)}`)}
-              alt={`Camera ${String(selectedCameraId)} ${viewLabel(selectedView)}`}
-            />
           {:else}
-            <p>No snapshots available for this camera.</p>
+            <div class="overlay-stage">
+              <canvas
+                bind:this={overlayCanvas}
+                aria-label={`Camera ${String(selectedCameraId)} ${viewLabel(selectedView)}`}
+              ></canvas>
+              {#if selectedView === "overlay"}
+                <div class="overlay-legend">
+                  <span class="field-key">Field</span>
+                  <span class="goal-key">Goals</span>
+                  <span class="marking-key">Markings</span>
+                  <span class="boundary-key">Boundary</span>
+                  <span class="corner-key">Corners</span>
+                </div>
+              {/if}
+            </div>
           {/if}
         </div>
       </section>
@@ -1780,11 +1860,6 @@
     background: var(--surface-hover);
   }
 
-  .picker button.active {
-    color: #ffffff;
-    background: var(--accent-strong);
-    border-color: var(--accent-strong);
-  }
 
   .action {
     min-height: 28px;
@@ -1951,10 +2026,35 @@
     background: var(--surface-hover);
   }
 
-  .view-tabs button.active {
+  /* The selected view has to be obvious at a glance: an operator glancing
+     back at the page should not have to work out which one is showing. */
+  .view-tabs button.active,
+  .picker button.active {
+    position: relative;
     color: #ffffff;
     background: var(--accent-strong);
-    border-color: var(--accent-strong);
+    border-color: var(--accent);
+    font-weight: 600;
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+
+  .view-tabs button.active::after,
+  .picker button.active::after {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: -1px;
+    height: 2px;
+    border-radius: 2px;
+    background: #ffffff;
+  }
+
+  .view-tabs button.active:hover,
+  .picker button.active:hover {
+    color: #ffffff;
+    background: var(--accent-strong);
+    border-color: var(--accent);
   }
 
   .view-tabs button:disabled {
@@ -1977,7 +2077,6 @@
     height: 100%;
   }
 
-  .overlay-stage img,
   .overlay-stage canvas {
     position: absolute;
     inset: 0;
@@ -2063,7 +2162,6 @@
     line-height: 1.55;
   }
 
-  .image-stage img,
   .image-stage canvas {
     width: 100%;
     height: 100%;
@@ -2071,10 +2169,6 @@
     object-fit: contain;
   }
 
-  .image-stage p {
-    color: var(--text-muted);
-    font-size: 13px;
-  }
 
   /* ---------- tables ---------- */
 
