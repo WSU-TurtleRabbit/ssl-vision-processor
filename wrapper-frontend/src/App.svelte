@@ -153,8 +153,11 @@
   const colorNames = ["orange", "field", "yellow", "blue", "green", "pink"];
 
   let snapshots = $state<Snapshot[]>([]);
-  let selectedCamera = $state<string>("combine");
-  let selectedView = $state("overlay");
+  // Seed from the URL so a particular camera and view can be linked to, and
+  // so a reload lands back where you were rather than on the combined field.
+  const initialParams = new URLSearchParams(location.search);
+  let selectedCamera = $state<string>(initialParams.get("camera") ?? "combine");
+  let selectedView = $state(initialParams.get("view") ?? "overlay");
   let cacheBuster = $state(0);
   // The C++ side rewrites the debug images every debug_stream_interval_ms
   // (100 ms on this setup). Refreshing them once a second left the picture
@@ -1098,7 +1101,21 @@
     refreshNow();
   }
 
+  /** Keep the address bar in step, without adding history entries. */
+  function syncUrl(): void {
+    const url = new URL(location.href);
+    if (isCombined) {
+      url.searchParams.delete("camera");
+      url.searchParams.delete("view");
+    } else {
+      url.searchParams.set("camera", selectedCamera);
+      url.searchParams.set("view", selectedView);
+    }
+    history.replaceState(null, "", url.toString());
+  }
+
   function refreshNow(): void {
+    syncUrl();
     cacheBuster = Date.now();
     loadSnapshots();
     loadConfig();
@@ -1189,36 +1206,30 @@
   </header>
 
   <div class="toolbar">
-    <label class="camera-picker">
-      <span>Camera</span>
-      <select bind:value={selectedCamera} onchange={refreshNow}>
-        <option value="combine">Combined ({combined.online}/{combined.count})</option>
-        {#each selectableCameraIds as id (id)}
-          <option value={String(id)}>
-            {id} &middot; {cameraList.find((camera) => camera.camera_id === id)?.name ??
-              `camera ${String(id)}`}
-          </option>
-        {/each}
-      </select>
-    </label>
-
-    <label class="camera-picker">
-      <span>View</span>
-      <select
-        value={isCombined ? "" : selectedView}
-        disabled={selectableCameraIds.length === 0}
-        onchange={(event) => {
-          chooseView(event.currentTarget.value);
+    <div class="picker" role="group" aria-label="Camera">
+      <span class="picker-label">Camera</span>
+      <button
+        class:active={isCombined}
+        onclick={() => {
+          selectedCamera = "combine";
+          refreshNow();
         }}
       >
-        {#if isCombined}
-          <option value="">Combined field</option>
-        {/if}
-        {#each cameraViews() as view (view)}
-          <option value={view}>{viewLabel(view)}</option>
-        {/each}
-      </select>
-    </label>
+        Combined ({combined.online}/{combined.count})
+      </button>
+      {#each selectableCameraIds as id (id)}
+        <button
+          class:active={!isCombined && selectedCameraId === id}
+          onclick={() => {
+            selectedCamera = String(id);
+            refreshNow();
+          }}
+        >
+          {id} &middot; {cameraList.find((camera) => camera.camera_id === id)?.name ??
+            `camera ${String(id)}`}
+        </button>
+      {/each}
+    </div>
 
     <span class="metric">
       {isCombined ? "Combined latency" : "Latency"}
@@ -1669,23 +1680,44 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .camera-picker {
+  /* Buttons rather than a <select>: the option list is rebuilt on every poll,
+     and rebuilding options under a bound select lets the control's displayed
+     value drift away from the state it is bound to. */
+  .picker {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: var(--text-secondary);
+    gap: 4px;
+    flex-wrap: wrap;
   }
 
-  .camera-picker select {
+  .picker-label {
+    margin-right: 4px;
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+
+  .picker button {
     height: 30px;
-    padding: 0 8px;
-    color: var(--text);
+    padding: 0 10px;
+    color: var(--text-secondary);
     background: var(--surface-raised);
     border: 1px solid var(--border-strong);
     border-radius: 4px;
     font-size: 12px;
     cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .picker button:hover {
+    color: var(--text);
+    border-color: var(--accent-strong);
+    background: var(--surface-hover);
+  }
+
+  .picker button.active {
+    color: #ffffff;
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
   }
 
   .action {
@@ -1705,7 +1737,7 @@
   }
 
   .action:focus-visible,
-  .camera-picker select:focus-visible,
+  .picker button:focus-visible,
   .view-tabs button:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
