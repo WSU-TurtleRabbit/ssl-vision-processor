@@ -385,8 +385,8 @@
     context.clearRect(0, 0, width, height);
 
     const styles = getComputedStyle(canvas);
-    const carpet = styles.getPropertyValue("--field-carpet").trim() || "#0d1a12";
-    const paint = styles.getPropertyValue("--field-paint").trim() || "#f4f7f5";
+    const carpet = styles.getPropertyValue("--field-carpet").trim() || "#17612f";
+    const paint = styles.getPropertyValue("--field-paint").trim() || "#ffffff";
 
     context.fillStyle = carpet;
     context.fillRect(0, 0, width, height);
@@ -408,13 +408,14 @@
     const toX = (x: number) => width / 2 + x * scale;
     const toY = (y: number) => height / 2 - y * scale;
 
-    // Carpet inside the boundary, so the playable area reads as distinct.
-    context.fillStyle = styles.getPropertyValue("--field-inner").trim() || "#10251a";
+    // The playing surface inside the boundary, a touch brighter than the
+    // surround so the run-off area is legible without an extra outline.
+    context.fillStyle = styles.getPropertyValue("--field-inner").trim() || "#1c7a3e";
     context.fillRect(
-      toX(-length / 2 - boundary),
-      toY(fieldWidth / 2 + boundary),
-      totalLength * scale,
-      totalWidth * scale,
+      toX(-length / 2),
+      toY(fieldWidth / 2),
+      length * scale,
+      fieldWidth * scale,
     );
 
     context.strokeStyle = paint;
@@ -458,31 +459,41 @@
     }
 
     const robotRadius = Number(field["max_robot_radius"] ?? 90);
+    // An SSL robot is a cylinder with the front flattened for the dribbler,
+    // so draw the same shape rather than a plain disc: the flat edge shows
+    // heading without needing a separate marker.
+    const dribblerOffset = Math.min(73, robotRadius * 0.81);
+    const halfFront = Math.acos(dribblerOffset / robotRadius);
+
     for (const robot of visibleRobots) {
       const stale = isStale(robot);
       const base =
         robot.team === "blue"
           ? styles.getPropertyValue("--blue").trim() || "#4aa3e8"
           : styles.getPropertyValue("--yellow").trim() || "#e5be22";
-      context.globalAlpha = stale ? 0.35 : 1;
+      const radius = robotRadius * scale;
+      context.globalAlpha = stale ? 0.4 : 1;
+
+      // Canvas y grows downwards while field y grows up, so angles are
+      // negated to keep the drawn heading matching the reported one.
+      const heading = -robot.orientation;
       context.beginPath();
-      context.arc(toX(robot.x), toY(robot.y), robotRadius * scale, 0, Math.PI * 2);
+      context.arc(
+        toX(robot.x),
+        toY(robot.y),
+        radius,
+        heading + halfFront,
+        heading - halfFront + Math.PI * 2,
+      );
+      context.closePath();
       context.fillStyle = base;
       context.fill();
-
-      // Heading spoke, so orientation is readable at a glance.
-      context.beginPath();
-      context.moveTo(toX(robot.x), toY(robot.y));
-      context.lineTo(
-        toX(robot.x + Math.cos(robot.orientation) * robotRadius * 1.6),
-        toY(robot.y + Math.sin(robot.orientation) * robotRadius * 1.6),
-      );
-      context.strokeStyle = base;
-      context.lineWidth = Math.max(1.5, robotRadius * 0.35 * scale);
+      context.lineWidth = Math.max(1, radius * 0.12);
+      context.strokeStyle = stale ? "#8fa39a" : "#0d1a12";
       context.stroke();
 
-      context.fillStyle = "#08100d";
-      context.font = `600 ${String(Math.max(9, robotRadius * scale * 0.95))}px Inter, system-ui, sans-serif`;
+      context.fillStyle = "#0d1a12";
+      context.font = `700 ${String(Math.max(8, radius * 1.1))}px Inter, system-ui, sans-serif`;
       context.textAlign = "center";
       context.textBaseline = "middle";
       context.fillText(String(robot.id), toX(robot.x), toY(robot.y));
@@ -491,16 +502,16 @@
 
     const ballRadius = Number(field["ball_radius"] ?? 21.5);
     for (const ball of balls) {
+      // A real ball is 21.5 mm, only a few pixels at field scale, so enforce a
+      // floor: it has to stay findable on a full-field view.
+      const drawn = Math.max(3.5, ballRadius * scale);
       context.beginPath();
-      context.arc(
-        toX(ball.x ?? 0),
-        toY(ball.y ?? 0),
-        Math.max(2.5, ballRadius * scale),
-        0,
-        Math.PI * 2,
-      );
+      context.arc(toX(ball.x ?? 0), toY(ball.y ?? 0), drawn, 0, Math.PI * 2);
       context.fillStyle = styles.getPropertyValue("--orange").trim() || "#e3732f";
       context.fill();
+      context.lineWidth = Math.max(1, drawn * 0.3);
+      context.strokeStyle = "#0d1a12";
+      context.stroke();
     }
   }
 
@@ -880,9 +891,12 @@
     --orange: #e3732f;
     --goal: #40cfff;
 
-    --field-carpet: #0b100e;
-    --field-inner: #10251a;
-    --field-paint: #f4f7f5;
+    /* Field render follows ssl-vision-client: green carpet, white markings.
+       The surround is a shade darker so the playing area reads as distinct
+       without drawing an extra border. */
+    --field-carpet: #17612f;
+    --field-inner: #1c7a3e;
+    --field-paint: #ffffff;
   }
 
   :global(*) {
