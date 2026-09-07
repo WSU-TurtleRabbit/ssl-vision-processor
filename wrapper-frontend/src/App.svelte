@@ -39,6 +39,8 @@
     robots_yellow?: RobotDetection[];
   }
 
+  type Point3 = [number, number, number];
+
   interface FieldLine {
     name?: string;
     p1?: { x?: number; y?: number };
@@ -152,8 +154,16 @@
 
   let snapshots = $state<Snapshot[]>([]);
   let selectedCamera = $state<string>("combine");
-  let selectedView = $state("raw");
+  let selectedView = $state("overlay");
   let cacheBuster = $state(0);
+  // The C++ side rewrites the debug images every debug_stream_interval_ms
+  // (100 ms on this setup). Refreshing them once a second left the picture
+  // visibly stale under an overlay that moves at the detection rate, so pull
+  // them several times a second instead.
+  const IMAGE_REFRESH_MS = 200;
+  // Staleness is judged on this tick, so it also sets how promptly a robot
+  // greys out when its camera stops reporting.
+  const AGE_TICK_MS = 50;
   let now = $state(Date.now());
   let configPayload = $state<ConfigResponse | null>(null);
   let health = $state<HealthResponse | null>(null);
@@ -166,6 +176,7 @@
   let geometryFile = $state<GeometryResponse | null>(null);
   let camerasHttp = $state<CamerasPayload | null>(null);
   let fieldCanvas = $state<HTMLCanvasElement>();
+  let overlayCanvas = $state<HTMLCanvasElement>();
 
   // Detections arrive per camera and each camera has its own frame counter,
   // so keep the newest frame from each rather than one shared slot. The
@@ -196,6 +207,13 @@
   // of the generated lines and arcs, and so the only thing that can be drawn.
   // It falls back to the file for dimensions before the first packet lands.
   let fieldFile = $derived(asRecord(geometryFile?.geometry["field"]));
+  // Which markings are actually painted on this carpet. The wrapper only
+  // generates the enabled ones, so the overlay has to honour them too -
+  // drawing a halfway line that is not on the floor makes the calibration
+  // check read as wrong when it is right.
+  let optionalLines = $derived(
+    asRecord(geometryFile?.geometry["optional_field_lines"]),
+  );
   let fieldDrawn = $derived<FieldData>({ ...fieldFile, ...(geometry?.field ?? {}) });
 
   let cameraSource = $derived(cameras ?? camerasHttp);
@@ -312,7 +330,7 @@
   $effect(() => {
     const timer = setInterval(() => {
       now = Date.now();
-    }, 100);
+    }, AGE_TICK_MS);
     return () => {
       clearInterval(timer);
     };
@@ -323,15 +341,19 @@
     drawField();
   });
 
+  $effect(() => {
+    void [overlayCanvas, selectedView, geometry, cameraCalibration, visibleRobots, balls];
+    drawFieldOverlay();
+  });
+
   // Views are per camera and not every camera writes every view, so a stale
   // selection would leave the stage blank after switching. Fall back to the
   // first view this camera actually has.
   $effect(() => {
     if (isCombined) return;
-    const available = cameraSnapshots();
-    if (available.length === 0) return;
-    if (!available.some((snapshot) => snapshot.view === selectedView)) {
-      selectedView = available[0]?.view ?? "raw";
+    const available = cameraViews();
+    if (!available.includes(selectedView)) {
+      selectedView = available[0] ?? "overlay";
     }
   });
 
@@ -402,6 +424,108 @@
     return [...heights].map((height) => height.toFixed(0)).join(" / ") + " mm";
   }
 
+  function valueNumber(value: unknown, fallback = 0): number {
+    const parsed = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  /** Project a field point through the solved camera model. */
+  function projectCameraPoint(point: Point3): [number, number] | null {
+    const focalLength = valueNumber(cameraCalibration["focal_length"]);
+    const principalX = valueNumber(cameraCalibration["principal_point_x"]);
+    const principalY = valueNumber(cameraCalibration["principal_point_y"]);
+    const distortion = valueNumber(cameraCalibration["distortion"]);
+    let qx = valueNumber(cameraCalibration["q0"]);
+    let qy = valueNumber(cameraCalibration["q1"]);
+    let qz = valueNumber(cameraCalibration["q2"]);
+    let qw = valueNumber(cameraCalibration["q3"], 1);
+    const quaternionLength = Math.hypot(qx, qy, qz, qw);
+    if (focalLength <= 0 || quaternionLength <= 0) return null;
+
+    qx /= quaternionLength;
+    qy /= quaternionLength;
+    qz /= quaternionLength;
+    qw /= quaternionLength;
+
+    const [x, y, z] = point;
+    const tx = 2 * (qy * z - qz * y);
+    const ty = 2 * (qz * x - qx * z);
+    const tz = 2 * (qx * y - qy * x);
+    const cameraX = x + qw * tx + (qy * tz - qz * ty) + valueNumber(cameraCalibration["tx"]);
+    const cameraY = y + qw * ty + (qz * tx - qx * tz) + valueNumber(cameraCalibration["ty"]);
+    const cameraZ = z + qw * tz + (qx * ty - qy * tx) + valueNumber(cameraCalibration["tz"]);
+    if (cameraZ <= 0.001) return null;
+
+    const originalX = cameraX / cameraZ;
+    const originalY = cameraY / cameraZ;
+    let normalizedX = originalX;
+    let normalizedY = originalY;
+    for (let iteration = 0; iteration < 10; iteration += 1) {
+      const scale = 1 + distortion * (normalizedX * normalizedX + normalizedY * normalizedY);
+      normalizedX = originalX / scale;
+      normalizedY = originalY / scale;
+    }
+    return [focalLength * normalizedX + principalX, focalLength * normalizedY + principalY];
+  }
+
+  /** Prefer the homography implied by the four configured line corners: it is
+   * what the operator actually tuned, so the drawn field matches the image
+   * even before the solver has converged. Falls back to the camera model. */
+  function projectFieldPoint(point: Point3): [number, number] | null {
+    const fieldLength = valueNumber(fieldDrawn["field_length"]);
+    const fieldWidth = valueNumber(fieldDrawn["field_width"]);
+    const corners = geometryConfig["line_corners"];
+    if (
+      fieldLength <= 0 ||
+      fieldWidth <= 0 ||
+      !Array.isArray(corners) ||
+      corners.length !== 4
+    ) {
+      return projectCameraPoint(point);
+    }
+
+    const parsed: [number, number][] = [];
+    for (const corner of corners) {
+      if (!Array.isArray(corner) || corner.length < 2) break;
+      const cornerX = valueNumber(corner[0], Number.NaN);
+      const cornerY = valueNumber(corner[1], Number.NaN);
+      if (!Number.isFinite(cornerX) || !Number.isFinite(cornerY)) break;
+      parsed.push([cornerX, cornerY]);
+    }
+
+    // Config order is bottom-left, top-left, top-right, bottom-right.
+    const [bottomLeft, topLeft, topRight, bottomRight] = parsed;
+    if (!bottomLeft || !topLeft || !topRight || !bottomRight) {
+      return projectCameraPoint(point);
+    }
+    const p0 = bottomLeft;
+    const p1 = bottomRight;
+    const p2 = topRight;
+    const p3 = topLeft;
+    const dx1 = p1[0] - p2[0];
+    const dx2 = p3[0] - p2[0];
+    const dx3 = p0[0] - p1[0] + p2[0] - p3[0];
+    const dy1 = p1[1] - p2[1];
+    const dy2 = p3[1] - p2[1];
+    const dy3 = p0[1] - p1[1] + p2[1] - p3[1];
+    const determinant = dx1 * dy2 - dx2 * dy1;
+    let g = 0;
+    let h = 0;
+    if (Math.abs(determinant) > 1e-9) {
+      g = (dx3 * dy2 - dx2 * dy3) / determinant;
+      h = (dx1 * dy3 - dx3 * dy1) / determinant;
+    }
+    const a = p1[0] - p0[0] + g * p1[0];
+    const b = p3[0] - p0[0] + h * p3[0];
+    const d = p1[1] - p0[1] + g * p1[1];
+    const e = p3[1] - p0[1] + h * p3[1];
+    const u = point[0] / fieldLength + 0.5;
+    const v = point[1] / fieldWidth + 0.5;
+    const scale = g * u + h * v + 1;
+    if (Math.abs(scale) <= 1e-9) return null;
+    return [(a * u + b * v + p0[0]) / scale, (d * u + e * v + p0[1]) / scale];
+  }
+
   function isStale(robot: TrackedRobot): boolean {
     return now - robot.lastSeen > STALE_MS;
   }
@@ -418,6 +542,7 @@
 
   function viewLabel(view: string): string {
     const labels: Record<string, string> = {
+      overlay: "Field overlay",
       raw: "Raw",
       flat: "Color delta",
       gradient: "Gradient",
@@ -429,6 +554,12 @@
       geomcalib_input: "Calib input",
     };
     return labels[view] ?? view;
+  }
+
+  /** Views offered for the selected camera: the synthesised field overlay
+   * first, then whatever this camera has actually written to disk. */
+  function cameraViews(): string[] {
+    return ["overlay", ...cameraSnapshots().map((snapshot) => snapshot.view)];
   }
 
   function cameraSnapshots(): Snapshot[] {
@@ -443,6 +574,224 @@
 
   function currentSnapshot(): Snapshot | undefined {
     return cameraSnapshots().find((snapshot) => snapshot.view === selectedView);
+  }
+
+  /** Draw field geometry and the live detections over this camera's image,
+   * in image pixels. This is the calibration check: if the drawn lines do not
+   * sit on the painted ones, the geometry is wrong. */
+  function drawFieldOverlay(): void {
+    const canvas = overlayCanvas;
+    if (!canvas || isCombined || selectedView !== "overlay") return;
+    const width = valueNumber(cameraCalibration["pixel_image_width"], 768);
+    const height = valueNumber(cameraCalibration["pixel_image_height"], 432);
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.clearRect(0, 0, width, height);
+    context.lineJoin = "round";
+    context.lineCap = "round";
+
+    const drawPath = (
+      points: Point3[],
+      stroke: string,
+      lineWidth = 2,
+      dash: number[] = [],
+      close = false,
+    ): void => {
+      const projected = points
+        .map(projectFieldPoint)
+        .filter((point): point is [number, number] => point !== null);
+      const first = projected[0];
+      if (projected.length < 2 || !first) return;
+      context.beginPath();
+      context.moveTo(first[0], first[1]);
+      for (const point of projected.slice(1)) context.lineTo(point[0], point[1]);
+      if (close) context.closePath();
+      context.setLineDash(dash);
+      // Dark halo first, so the line stays readable over pale carpet.
+      context.strokeStyle = "rgba(0, 0, 0, 0.78)";
+      context.lineWidth = lineWidth + 3;
+      context.stroke();
+      context.strokeStyle = stroke;
+      context.lineWidth = lineWidth;
+      context.stroke();
+      context.setLineDash([]);
+    };
+
+    const fieldLength = valueNumber(fieldDrawn["field_length"]);
+    const fieldWidth = valueNumber(fieldDrawn["field_width"]);
+    if (fieldLength <= 0 || fieldWidth <= 0) return;
+    const halfLength = fieldLength / 2;
+    const halfWidth = fieldWidth / 2;
+    const boundary = valueNumber(fieldDrawn["boundary_width"]);
+    const goalWidth = valueNumber(fieldDrawn["goal_width"]);
+    const goalDepth = valueNumber(fieldDrawn["goal_depth"]);
+    const penaltyDepth = valueNumber(fieldDrawn["penalty_area_depth"]);
+    const penaltyWidth = valueNumber(fieldDrawn["penalty_area_width"]);
+    const centerRadius = valueNumber(fieldDrawn["center_circle_radius"]);
+
+    drawPath(
+      [
+        [-halfLength - boundary, -halfWidth - boundary, 0],
+        [halfLength + boundary, -halfWidth - boundary, 0],
+        [halfLength + boundary, halfWidth + boundary, 0],
+        [-halfLength - boundary, halfWidth + boundary, 0],
+      ],
+      "#4dd8a0",
+      1.5,
+      [8, 6],
+      true,
+    );
+
+    drawPath(
+      [
+        [-halfLength, -halfWidth, 0],
+        [halfLength, -halfWidth, 0],
+        [halfLength, halfWidth, 0],
+        [-halfLength, halfWidth, 0],
+      ],
+      "#f4f7f5",
+      2.2,
+      [],
+      true,
+    );
+    if (optionalLines["halfway"] === true) {
+      drawPath(
+        [
+          [0, -halfWidth, 0],
+          [0, halfWidth, 0],
+        ],
+        "#ffd451",
+        1.7,
+      );
+    }
+
+    if (optionalLines["goal2goal"] === true) {
+      drawPath(
+        [
+          [-halfLength, 0, 0],
+          [halfLength, 0, 0],
+        ],
+        "#ffd451",
+        1.7,
+      );
+    }
+
+    if (optionalLines["centercircle"] === true && centerRadius > 0) {
+      const circle: Point3[] = [];
+      for (let step = 0; step <= 64; step += 1) {
+        const angle = (step / 64) * Math.PI * 2;
+        circle.push([Math.cos(angle) * centerRadius, Math.sin(angle) * centerRadius, 0]);
+      }
+      drawPath(circle, "#ffd451", 1.7, [], true);
+    }
+
+    if (optionalLines["penalty"] === true && penaltyDepth > 0 && penaltyWidth > 0) {
+      const halfPenaltyWidth = penaltyWidth / 2;
+      for (const side of [-1, 1]) {
+        drawPath(
+          [
+            [side * halfLength, -halfPenaltyWidth, 0],
+            [side * (halfLength - penaltyDepth), -halfPenaltyWidth, 0],
+            [side * (halfLength - penaltyDepth), halfPenaltyWidth, 0],
+            [side * halfLength, halfPenaltyWidth, 0],
+          ],
+          "#ff78ae",
+          1.7,
+        );
+      }
+    }
+
+    if (goalWidth > 0 && goalDepth > 0) {
+      const halfGoalWidth = goalWidth / 2;
+      for (const side of [-1, 1]) {
+        drawPath(
+          [
+            [side * halfLength, -halfGoalWidth, 0],
+            [side * (halfLength + goalDepth), -halfGoalWidth, 0],
+            [side * (halfLength + goalDepth), halfGoalWidth, 0],
+            [side * halfLength, halfGoalWidth, 0],
+          ],
+          "#40cfff",
+          2.1,
+          [],
+          true,
+        );
+      }
+    }
+
+    // Live detections, projected at their own reported height so a robot
+    // marker sits on the robot rather than on the carpet beneath it.
+    const robotRadius = valueNumber(fieldDrawn["max_robot_radius"], 90);
+    for (const robot of visibleRobots) {
+      const centre = projectFieldPoint([robot.x, robot.y, robot.height]);
+      if (!centre) continue;
+      const edge = projectFieldPoint([robot.x + robotRadius, robot.y, robot.height]);
+      const drawn = edge ? Math.max(4, Math.abs(edge[0] - centre[0])) : 8;
+      const stale = isStale(robot);
+      context.globalAlpha = stale ? 0.4 : 1;
+
+      context.beginPath();
+      context.arc(centre[0], centre[1], drawn, 0, Math.PI * 2);
+      context.fillStyle = robot.team === "blue" ? "#4aa3e8" : "#e5be22";
+      context.fill();
+      context.lineWidth = 2;
+      context.strokeStyle = "rgba(0, 0, 0, 0.8)";
+      context.stroke();
+
+      const nose = projectFieldPoint([
+        robot.x + Math.cos(robot.orientation) * robotRadius * 1.4,
+        robot.y + Math.sin(robot.orientation) * robotRadius * 1.4,
+        robot.height,
+      ]);
+      if (nose) {
+        context.beginPath();
+        context.moveTo(centre[0], centre[1]);
+        context.lineTo(nose[0], nose[1]);
+        context.strokeStyle = "rgba(0, 0, 0, 0.8)";
+        context.lineWidth = 3;
+        context.stroke();
+      }
+
+      context.fillStyle = "#0d1a12";
+      context.font = `700 ${String(Math.max(9, drawn))}px Inter, system-ui, sans-serif`;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(String(robot.id), centre[0], centre[1]);
+      context.globalAlpha = 1;
+    }
+
+    for (const ball of balls) {
+      const centre = projectFieldPoint([ball.x ?? 0, ball.y ?? 0, ball.z ?? 0]);
+      if (!centre) continue;
+      context.beginPath();
+      context.arc(centre[0], centre[1], 5, 0, Math.PI * 2);
+      context.fillStyle = "#e3732f";
+      context.fill();
+      context.lineWidth = 1.5;
+      context.strokeStyle = "#ffffff";
+      context.stroke();
+    }
+
+    // The tuned corner pixels themselves, so a bad calibration is obvious.
+    const inputCorners =
+      geometryConfig["outer_line_corners"] ?? geometryConfig["line_corners"];
+    if (Array.isArray(inputCorners)) {
+      for (const corner of inputCorners) {
+        if (!Array.isArray(corner) || corner.length < 2) continue;
+        const x = valueNumber(corner[0], Number.NaN);
+        const y = valueNumber(corner[1], Number.NaN);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        context.beginPath();
+        context.arc(x, y, 5, 0, Math.PI * 2);
+        context.fillStyle = "#ff5b55";
+        context.fill();
+        context.strokeStyle = "#ffffff";
+        context.lineWidth = 1.5;
+        context.stroke();
+      }
+    }
   }
 
   /** Draw the field and everything on it, top-down, in field coordinates. */
@@ -629,14 +978,14 @@
     loadHealth();
     loadGeometry();
     loadCameras();
-    const snapshotTimer = setInterval(loadSnapshots, 5000);
+    const snapshotTimer = setInterval(loadSnapshots, 3000);
     const configTimer = setInterval(loadConfig, 5000);
-    const healthTimer = setInterval(loadHealth, 2000);
+    const healthTimer = setInterval(loadHealth, 1000);
     const geometryTimer = setInterval(loadGeometry, 5000);
     const camerasTimer = setInterval(loadCameras, 1000);
     const imageTimer = setInterval(() => {
       cacheBuster = Date.now();
-    }, 1000);
+    }, IMAGE_REFRESH_MS);
     const resize = () => {
       drawField();
     };
@@ -729,22 +1078,42 @@
           {/if}
         </div>
 
-        {#if !isCombined}
-          <nav class="view-tabs" aria-label="Diagnostic view">
-            {#each cameraSnapshots() as snapshot (`${snapshot.cam_id}.${snapshot.view}`)}
+        <nav class="view-tabs" class:disabled={isCombined} aria-label="Diagnostic view">
+          {#if isCombined}
+            <span class="tabs-hint">Select a camera to enable the diagnostic views</span>
+          {:else}
+            {#each cameraViews() as view (view)}
               <button
-                class:active={snapshot.view === selectedView}
-                onclick={() => (selectedView = snapshot.view)}
+                class:active={view === selectedView}
+                onclick={() => {
+                  selectedView = view;
+                }}
               >
-                {viewLabel(snapshot.view)}
+                {viewLabel(view)}
               </button>
             {/each}
-          </nav>
-        {/if}
+          {/if}
+        </nav>
 
         <div class="image-stage" class:field-stage={isCombined}>
           {#if isCombined}
             <canvas bind:this={fieldCanvas} aria-label="Top-down field view"></canvas>
+          {:else if selectedView === "overlay"}
+            <div class="overlay-stage">
+              <img
+                src={api(`/snapshot/${String(selectedCameraId)}/raw?t=${String(cacheBuster)}`)}
+                alt={`Camera ${String(selectedCameraId)} field overlay`}
+                onload={drawFieldOverlay}
+              />
+              <canvas bind:this={overlayCanvas} aria-label="Projected field geometry and detections"></canvas>
+              <div class="overlay-legend">
+                <span class="field-key">Field</span>
+                <span class="goal-key">Goals</span>
+                <span class="marking-key">Markings</span>
+                <span class="boundary-key">Boundary</span>
+                <span class="corner-key">Corners</span>
+              </div>
+            </div>
           {:else if currentSnapshot()}
             <img
               src={api(`/snapshot/${String(selectedCameraId)}/${selectedView}?t=${String(cacheBuster)}`)}
@@ -1266,6 +1635,81 @@
     color: #ffffff;
     background: var(--accent-strong);
     border-color: var(--accent-strong);
+  }
+
+  .view-tabs.disabled {
+    align-items: center;
+    padding-inline: 12px;
+  }
+
+  .tabs-hint {
+    color: var(--text-muted);
+    font-size: 11.5px;
+    font-style: italic;
+  }
+
+  .overlay-stage {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+
+  .overlay-stage img,
+  .overlay-stage canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .overlay-stage canvas {
+    pointer-events: none;
+  }
+
+  .overlay-legend {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 5px 7px;
+    color: var(--text);
+    background: rgba(8, 12, 10, 0.82);
+    border: 1px solid rgba(220, 232, 224, 0.28);
+    border-radius: 3px;
+    font-size: 10px;
+  }
+
+  .overlay-legend span::before {
+    content: "";
+    width: 12px;
+    height: 2px;
+    display: inline-block;
+    margin-right: 4px;
+    vertical-align: 3px;
+    background: #f4f7f5;
+  }
+
+  .overlay-legend .goal-key::before {
+    background: #40cfff;
+  }
+
+  .overlay-legend .marking-key::before {
+    background: #ffd451;
+  }
+
+  .overlay-legend .boundary-key::before {
+    background: #4dd8a0;
+  }
+
+  .overlay-legend .corner-key::before {
+    height: 6px;
+    width: 6px;
+    border-radius: 50%;
+    background: #ff5b55;
+    vertical-align: 1px;
   }
 
   .image-stage {
