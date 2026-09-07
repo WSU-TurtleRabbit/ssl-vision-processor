@@ -14,6 +14,9 @@
      limitations under the License.
  */
 #include <csignal>
+#include <cstdio>
+#include <fstream>
+#include <unistd.h>
 #include "log.h"
 #include <yaml-cpp/yaml.h>
 
@@ -339,7 +342,27 @@ void sig_stop(int sig_num) {
 	noSigterm = false;
 }
 
+// The operator UI reports whether the detector is alive by reading this file.
+// Writing it here means the report follows the process instead of whatever a
+// launcher last recorded, so restarting by hand cannot leave a stale pid behind.
+static const char* PID_FILE = "/tmp/vision-processor.pid";
+
+static void removePidFile() {
+	std::remove(PID_FILE);
+}
+
+static void writePidFile() {
+	std::ofstream file(PID_FILE);
+	if(!file) {
+		WARN("Could not write pid file " << PID_FILE);
+		return;
+	}
+	file << getpid() << std::endl;
+	std::atexit(removePidFile);
+}
+
 int main(int argc, char* argv[]) {
+	writePidFile();
 	Resources r(argc > 1 ? argv[1] : "config.yml");
 	DetectionCorrector detectionCorrector(r.lineCorners, (float)r.cameraHeight);
 	BallOcclusionTracker ballOcclusionTracker;
