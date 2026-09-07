@@ -174,6 +174,7 @@
   // leave the field dimensions and the camera roster blank indefinitely -
   // and both should be readable whenever the backend is up at all.
   let geometryFile = $state<GeometryResponse | null>(null);
+  let fieldHttp = $state<GeometryData | null>(null);
   let camerasHttp = $state<CamerasPayload | null>(null);
   let fieldCanvas = $state<HTMLCanvasElement>();
   let overlayCanvas = $state<HTMLCanvasElement>();
@@ -206,6 +207,11 @@
   // fieldDrawn is the wrapper's broadcast geometry, which is the only source
   // of the generated lines and arcs, and so the only thing that can be drawn.
   // It falls back to the file for dimensions before the first packet lands.
+  // The broadcast geometry, however it reached us. It carries the generated
+  // field lines and the absorbed calibrations, so without it there is nothing
+  // to draw and no solved camera model to report.
+  let liveGeometry = $derived(geometry ?? fieldHttp);
+
   let fieldFile = $derived(asRecord(geometryFile?.geometry["field"]));
   // Which markings are actually painted on this carpet. The wrapper only
   // generates the enabled ones, so the overlay has to honour them too -
@@ -214,7 +220,7 @@
   let optionalLines = $derived(
     asRecord(geometryFile?.geometry["optional_field_lines"]),
   );
-  let fieldDrawn = $derived<FieldData>({ ...fieldFile, ...(geometry?.field ?? {}) });
+  let fieldDrawn = $derived<FieldData>({ ...fieldFile, ...(liveGeometry?.field ?? {}) });
 
   let cameraSource = $derived(cameras ?? camerasHttp);
 
@@ -257,7 +263,7 @@
   // Calibration is published per camera; match it to the selection rather
   // than always reading calib[0], which is only correct for one camera.
   let cameraCalibration = $derived.by<DataMap>(() => {
-    const calibs = geometry?.calib ?? [];
+    const calibs = liveGeometry?.calib ?? [];
     if (selectedCameraId === null) return calibs[0] ?? {};
     return (
       calibs.find((calib) => Number(calib["camera_id"] ?? -1) === selectedCameraId) ?? {}
@@ -337,12 +343,12 @@
   });
 
   $effect(() => {
-    void [fieldCanvas, geometry, visibleRobots, balls, isCombined];
+    void [fieldCanvas, liveGeometry, visibleRobots, balls, isCombined];
     drawField();
   });
 
   $effect(() => {
-    void [overlayCanvas, selectedView, geometry, cameraCalibration, visibleRobots, balls];
+    void [overlayCanvas, selectedView, liveGeometry, cameraCalibration, visibleRobots, balls];
     drawFieldOverlay();
   });
 
@@ -559,6 +565,13 @@
   /** Views offered for the selected camera: the synthesised field overlay
    * first, then whatever this camera has actually written to disk. */
   function cameraViews(): string[] {
+    if (isCombined) {
+      // Nothing is selected, so show the usual set disabled rather than an
+      // empty bar - the tabs should read as available-once-you-pick-a-camera.
+      const seen = snapshots.map((snapshot) => snapshot.view);
+      const known = preferredViews.filter((view) => seen.includes(view));
+      return ["overlay", ...(known.length > 0 ? known : preferredViews)];
+    }
     return ["overlay", ...cameraSnapshots().map((snapshot) => snapshot.view)];
   }
 
@@ -966,6 +979,12 @@
         .then((data: GeometryResponse) => (geometryFile = data))
         .catch(() => undefined);
     };
+    const loadField = () => {
+      fetch(api("/api/field"))
+        .then((response) => response.json())
+        .then((data: GeometryData) => (fieldHttp = data))
+        .catch(() => undefined);
+    };
     const loadCameras = () => {
       fetch(api("/api/cameras"))
         .then((response) => response.json())
@@ -977,12 +996,14 @@
     loadConfig();
     loadHealth();
     loadGeometry();
+    loadField();
     loadCameras();
     const snapshotTimer = setInterval(loadSnapshots, 3000);
     const configTimer = setInterval(loadConfig, 5000);
     const healthTimer = setInterval(loadHealth, 1000);
     const geometryTimer = setInterval(loadGeometry, 5000);
     const camerasTimer = setInterval(loadCameras, 1000);
+    const fieldTimer = setInterval(loadField, 1000);
     const imageTimer = setInterval(() => {
       cacheBuster = Date.now();
     }, IMAGE_REFRESH_MS);
@@ -997,6 +1018,7 @@
       clearInterval(healthTimer);
       clearInterval(geometryTimer);
       clearInterval(camerasTimer);
+      clearInterval(fieldTimer);
       clearInterval(imageTimer);
       window.removeEventListener("resize", resize);
     };
@@ -1078,21 +1100,19 @@
           {/if}
         </div>
 
-        <nav class="view-tabs" class:disabled={isCombined} aria-label="Diagnostic view">
-          {#if isCombined}
-            <span class="tabs-hint">Select a camera to enable the diagnostic views</span>
-          {:else}
-            {#each cameraViews() as view (view)}
-              <button
-                class:active={view === selectedView}
-                onclick={() => {
-                  selectedView = view;
-                }}
-              >
-                {viewLabel(view)}
-              </button>
-            {/each}
-          {/if}
+        <nav class="view-tabs" aria-label="Diagnostic view">
+          {#each cameraViews() as view (view)}
+            <button
+              class:active={!isCombined && view === selectedView}
+              disabled={isCombined}
+              title={isCombined ? "Select a camera to view diagnostics" : viewLabel(view)}
+              onclick={() => {
+                selectedView = view;
+              }}
+            >
+              {viewLabel(view)}
+            </button>
+          {/each}
         </nav>
 
         <div class="image-stage" class:field-stage={isCombined}>
@@ -1637,15 +1657,18 @@
     border-color: var(--accent-strong);
   }
 
-  .view-tabs.disabled {
-    align-items: center;
-    padding-inline: 12px;
+  .view-tabs button:disabled {
+    color: var(--text-muted);
+    background: transparent;
+    border-color: transparent;
+    cursor: not-allowed;
+    opacity: 0.55;
   }
 
-  .tabs-hint {
+  .view-tabs button:disabled:hover {
     color: var(--text-muted);
-    font-size: 11.5px;
-    font-style: italic;
+    background: transparent;
+    border-color: transparent;
   }
 
   .overlay-stage {

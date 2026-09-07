@@ -14,7 +14,8 @@ import math
 from pathlib import Path
 
 import yaml
-from google.protobuf.json_format import ParseDict
+from aiohttp import web
+from google.protobuf.json_format import MessageToDict, ParseDict
 
 from proto.ssl_vision_geometry_pb2 import (
     SSL_FieldShapeType,
@@ -140,6 +141,24 @@ def load_geometry(path: Path) -> SSL_WrapperPacket:
 
 
 class Geometry:
+    def register(self, http_app: web.Application) -> None:
+        """Serve the merged geometry over HTTP as well as the bus.
+
+        It carries the generated field lines and the absorbed per-camera
+        calibrations, which nothing else can supply, so a client that misses
+        the topic has no other way to draw the field or report the solved
+        camera model.
+        """
+
+        async def field_handler(_: web.Request) -> web.Response:
+            return web.json_response(
+                MessageToDict(
+                    self._wrapper.geometry, preserving_proto_field_name=True
+                )
+            )
+
+        http_app.router.add_get("/api/field", field_handler)
+
     def __init__(self, bus: Bus, geometry_yml_path: Path) -> None:
         self._bus = bus
         self._wrapper = load_geometry(geometry_yml_path)

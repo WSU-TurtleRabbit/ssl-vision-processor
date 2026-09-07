@@ -58,6 +58,7 @@ async def _main() -> None:
     http_app = web.Application(middlewares=[_cors_middleware])
     websocket.register(http_app, bus)
     cameras.register(http_app)
+    geometry.register(http_app)
     img_dir = args.vision_config.parent / "img"
     snapshot.register(http_app, img_dir)
     operator.register(
