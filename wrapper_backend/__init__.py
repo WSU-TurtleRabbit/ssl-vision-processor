@@ -27,17 +27,28 @@ def _generate_proto_bindings() -> None:
     # protobuf runtime.
     try:
         from grpc_tools import protoc as _grpc_protoc  # type: ignore
-        argv = [
-            "protoc",
-            f"-I{_REPO_ROOT}",
-            f"--python_out={_BACKEND_DIR}",
-            *args,
-        ]
+
+        argv = ["protoc", f"-I{_REPO_ROOT}", f"--python_out={_BACKEND_DIR}"]
+
+        # mypy-protobuf emits the .pyi stubs that make generated messages
+        # visible to mypy. Without them every `from proto.X_pb2 import Y` is an
+        # attr-defined error, because the classes are built at runtime. The
+        # plugin installs as a console script beside the running interpreter,
+        # so point protoc straight at it instead of relying on PATH.
+        stub_plugin = pathlib.Path(sys.executable).parent / "protoc-gen-mypy"
+        stub_argv = (
+            [f"--plugin=protoc-gen-mypy={stub_plugin}", f"--mypy_out={_BACKEND_DIR}"]
+            if stub_plugin.is_file()
+            else []
+        )
+
         # grpc_tools.protoc.main returns 0 on success
-        rc = _grpc_protoc.main(argv)
-        if rc == 0:
+        if _grpc_protoc.main([*argv, *stub_argv, *args]) == 0:
             return
-        # fall through to system protoc if grpc_tools.protoc failed
+        # Stubs are a type-checking nicety, not required to run. Retry without
+        # them before falling through to system protoc.
+        if stub_argv and _grpc_protoc.main([*argv, *args]) == 0:
+            return
     except Exception:
         # grpc_tools not available or failed; fall back to system protoc
         pass

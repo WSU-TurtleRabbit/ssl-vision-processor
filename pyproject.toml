@@ -10,7 +10,15 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    # grpcio-tools ships protoc as a wheel, so proto generation uses a compiler
+    # matched to the installed protobuf runtime instead of whatever `protoc`
+    # happens to be on PATH. wrapper_backend/__init__.py and
+    # python/visionsocket.py both prefer it.
+    "grpcio-tools>=1.83.1",
     "mypy>=2.0.0",
+    # protoc plugin that writes the _pb2.pyi stubs mypy needs to see generated
+    # message classes.
+    "mypy-protobuf>=5.1.0",
     "pre-commit>=4.6.0",
     "ruff>=0.15.12",
     "types-protobuf>=7.34.1.20260503",
