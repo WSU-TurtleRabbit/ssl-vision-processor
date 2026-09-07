@@ -116,6 +116,12 @@
     services: Record<string, ServiceHealth>;
   }
 
+  interface TrailPoint {
+    x: number;
+    y: number;
+    t: number;
+  }
+
   /** A robot we have seen, kept briefly after it stops being detected. */
   interface TrackedRobot {
     key: string;
@@ -128,6 +134,7 @@
     height: number;
     camera: number;
     lastSeen: number;
+    trail: TrailPoint[];
   }
 
   // A robot greys out this long after its last detection, and is dropped
@@ -135,6 +142,10 @@
   // keeps the display from flickering at ~20 fps.
   const STALE_MS = 250;
   const DROP_MS = 1000;
+  // How much recent motion to keep behind each object. Long enough to read a
+  // direction at a glance, short enough that a robot circling does not draw
+  // over the whole field.
+  const TRAIL_MS = 1200;
 
   const wrapperPacket = topic<WrapperPacket>("wrapper_packet.out");
   const detectionPacket = topic<DetectionFrame>("detection.in");
@@ -164,9 +175,6 @@
   // visibly stale under an overlay that moves at the detection rate, so pull
   // them several times a second instead.
   const IMAGE_REFRESH_MS = 200;
-  // Staleness is judged on this tick, so it also sets how promptly a robot
-  // greys out when its camera stops reporting.
-  const AGE_TICK_MS = 50;
   let now = $state(Date.now());
   let configPayload = $state<ConfigResponse | null>(null);
   let health = $state<HealthResponse | null>(null);
@@ -191,6 +199,7 @@
   // moment the detector runs anywhere else - which is the whole point of the
   // multi-camera setup. Robots already age off a local stamp; balls now do too.
   let frameArrivedAt = $state<Record<number, number>>({});
+  let ballTrails = $state<Record<number, TrailPoint[]>>({});
   let tracked = $state<Record<string, TrackedRobot>>({});
   let lastUpdate = $state<number | null>(null);
 
@@ -358,12 +367,18 @@
 
   // Re-evaluate ages on a timer so entries grey out and expire even when no
   // new frames arrive - which is exactly the case a dead camera produces.
+  // Ages advance on the display's own clock rather than a timer. Data arrives
+  // at whatever rate the detector manages (~22/s here), but fades, trails and
+  // staleness are time-based and should move smoothly between packets.
   $effect(() => {
-    const timer = setInterval(() => {
+    let frame = 0;
+    const tick = () => {
       now = Date.now();
-    }, AGE_TICK_MS);
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
     return () => {
-      clearInterval(timer);
+      cancelAnimationFrame(frame);
     };
   });
 
@@ -396,22 +411,43 @@
       for (const robot of robots) {
         const id = robot.robot_id ?? -1;
         const key = `${team}-${String(id)}`;
+        const x = robot.x ?? 0;
+        const y = robot.y ?? 0;
+        // Reported positions only - never interpolated. An operator watching
+        // for tracking glitches has to be able to trust that every point drawn
+        // is one the detector actually produced.
+        const trail = [...(next[key]?.trail ?? []), { x, y, t: stamp }].filter(
+          (point) => stamp - point.t <= TRAIL_MS,
+        );
         next[key] = {
           key,
           team,
           id,
-          x: robot.x ?? 0,
-          y: robot.y ?? 0,
+          x,
+          y,
           orientation: robot.orientation ?? 0,
           confidence: robot.confidence ?? 0,
           height: robot.height ?? 0,
           camera,
           lastSeen: stamp,
+          trail,
         };
       }
     };
     record("blue", frame.robots_blue ?? []);
     record("yellow", frame.robots_yellow ?? []);
+
+    const firstBall = (frame.balls ?? [])[0];
+    if (firstBall) {
+      const previous = ballTrails[camera] ?? [];
+      ballTrails = {
+        ...ballTrails,
+        [camera]: [
+          ...previous,
+          { x: firstBall.x ?? 0, y: firstBall.y ?? 0, t: stamp },
+        ].filter((point) => stamp - point.t <= TRAIL_MS),
+      };
+    }
     tracked = Object.fromEntries(
       Object.entries(next).filter(([, robot]) => stamp - robot.lastSeen <= DROP_MS),
     );
@@ -977,11 +1013,41 @@
     }
 
     const robotRadius = Number(fieldDrawn["max_robot_radius"] ?? 90);
+    const robotRadiusPx = robotRadius * scale;
     // An SSL robot is a cylinder with the front flattened for the dribbler,
     // so draw the same shape rather than a plain disc: the flat edge shows
     // heading without needing a separate marker.
     const dribblerOffset = Math.min(73, robotRadius * 0.81);
     const halfFront = Math.acos(dribblerOffset / robotRadius);
+
+    // Trails first, so each object sits on top of its own history. Older
+    // segments fade, which shows direction of travel without an arrowhead:
+    // the bright end is where the object is now. Every point is a position
+    // the detector actually reported - nothing here is interpolated.
+    const drawTrail = (points: TrailPoint[], color: string): void => {
+      for (let i = 1; i < points.length; i += 1) {
+        const from = points[i - 1];
+        const to = points[i];
+        if (!from || !to) continue;
+        context.globalAlpha = Math.max(0, 0.5 * (1 - (now - to.t) / TRAIL_MS));
+        context.beginPath();
+        context.moveTo(toX(from.x), toY(from.y));
+        context.lineTo(toX(to.x), toY(to.y));
+        context.strokeStyle = color;
+        context.lineWidth = Math.max(1.5, robotRadiusPx * 0.45);
+        context.lineCap = "round";
+        context.stroke();
+      }
+      context.globalAlpha = 1;
+    };
+
+    for (const robot of visibleRobots) {
+      drawTrail(robot.trail, robot.team === "blue" ? "#4aa3e8" : "#e5be22");
+    }
+    for (const [key, points] of Object.entries(ballTrails)) {
+      if (selectedCameraId !== null && Number(key) !== selectedCameraId) continue;
+      drawTrail(points, "#e3732f");
+    }
 
     for (const robot of visibleRobots) {
       const stale = isStale(robot);
@@ -989,7 +1055,7 @@
         robot.team === "blue"
           ? styles.getPropertyValue("--blue").trim() || "#4aa3e8"
           : styles.getPropertyValue("--yellow").trim() || "#e5be22";
-      const radius = robotRadius * scale;
+      const radius = robotRadiusPx;
       context.globalAlpha = stale ? 0.4 : 1;
 
       // Canvas y grows downwards while field y grows up, so angles are
@@ -2324,9 +2390,89 @@
     }
   }
 
+  /* ---------- liveness ---------- */
+
+  /* Controls respond to the pointer. Small movements, but they make the page
+     feel like something running rather than a screenshot of one. */
+  .picker button,
+  .view-tabs button,
+  .action {
+    transition:
+      transform 90ms ease,
+      background-color 120ms ease,
+      border-color 120ms ease,
+      color 120ms ease;
+  }
+
+  .picker button:hover:not(:disabled),
+  .view-tabs button:hover:not(:disabled),
+  .action:hover {
+    transform: translateY(-1px);
+  }
+
+  .picker button:active:not(:disabled),
+  .view-tabs button:active:not(:disabled),
+  .action:active {
+    transform: translateY(1px);
+  }
+
+  /* A live feed pulses; a dead one sits still. The animation is the signal,
+     so it is easy to see from across a room that data is still arriving. */
+  .status-badge.healthy .status-dot,
+  .service-indicator.online {
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgba(78, 203, 138, 0.55);
+    }
+    50% {
+      box-shadow: 0 0 0 4px rgba(78, 203, 138, 0);
+    }
+  }
+
+  /* Values that change on their own get a brief tint as they land, so a
+     number moving is noticeable without staring at it. */
+  .metric strong,
+  .camera-table .mono {
+    transition: color 400ms ease;
+  }
+
+  .robot-chip {
+    animation: chip-in 160ms ease-out;
+  }
+
+  @keyframes chip-in {
+    from {
+      opacity: 0;
+      transform: scale(0.94);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    .robot-chip {
+    .robot-chip,
+    .picker button,
+    .view-tabs button,
+    .action,
+    .status-badge.healthy .status-dot,
+    .service-indicator.online {
+      animation: none;
       transition: none;
+    }
+
+    .picker button:hover:not(:disabled),
+    .view-tabs button:hover:not(:disabled),
+    .action:hover,
+    .picker button:active:not(:disabled),
+    .view-tabs button:active:not(:disabled),
+    .action:active {
+      transform: none;
     }
   }
 </style>
