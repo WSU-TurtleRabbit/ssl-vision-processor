@@ -47,7 +47,13 @@ def register(http_app: web.Application, img_dir: Path) -> None:
             newest = max(matches, key=lambda p: p.stat().st_mtime)
         except FileNotFoundError:
             raise web.HTTPNotFound from None
-        return web.FileResponse(newest)
+        response = web.FileResponse(newest)
+        # These are overwritten in place several times a second, so the same
+        # URL means something different each time it is asked for. Caching it
+        # is never right, and the client's cache-busting query would otherwise
+        # accumulate a fresh entry for every frame it ever displayed.
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     http_app.router.add_get("/snapshots", list_handler)
     http_app.router.add_get("/snapshot/{cam_id}/{view}", file_handler)

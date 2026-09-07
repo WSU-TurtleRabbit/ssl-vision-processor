@@ -1016,44 +1016,68 @@
     }
   }
 
-  onMount(() => {
-    const loadSnapshots = () => {
-      fetch(api("/snapshots"))
-        .then((response) => response.json())
-        .then((data: Snapshot[]) => (snapshots = data))
-        .catch(() => undefined);
-    };
-    const loadConfig = () => {
-      fetch(api("/api/config"))
-        .then((response) => response.json())
-        .then((data: ConfigResponse) => (configPayload = data))
-        .catch(() => undefined);
-    };
-    const loadHealth = () => {
-      fetch(api("/api/health"))
-        .then((response) => response.json())
-        .then((data: HealthResponse) => (health = data))
-        .catch(() => undefined);
-    };
-    const loadGeometry = () => {
-      fetch(api("/api/geometry"))
-        .then((response) => response.json())
-        .then((data: GeometryResponse) => (geometryFile = data))
-        .catch(() => undefined);
-    };
-    const loadField = () => {
-      fetch(api("/api/field"))
-        .then((response) => response.json())
-        .then((data: GeometryData) => (fieldHttp = data))
-        .catch(() => undefined);
-    };
-    const loadCameras = () => {
-      fetch(api("/api/cameras"))
-        .then((response) => response.json())
-        .then((data: CamerasPayload) => (camerasHttp = data))
-        .catch(() => undefined);
-    };
+  function loadSnapshots(): void {
+    fetch(api("/snapshots"))
+      .then((response) => response.json())
+      .then((data: Snapshot[]) => (snapshots = data))
+      .catch(() => undefined);
+  }
 
+  function loadConfig(): void {
+    fetch(api("/api/config"))
+      .then((response) => response.json())
+      .then((data: ConfigResponse) => (configPayload = data))
+      .catch(() => undefined);
+  }
+
+  function loadHealth(): void {
+    fetch(api("/api/health"))
+      .then((response) => response.json())
+      .then((data: HealthResponse) => (health = data))
+      .catch(() => undefined);
+  }
+
+  function loadGeometry(): void {
+    fetch(api("/api/geometry"))
+      .then((response) => response.json())
+      .then((data: GeometryResponse) => (geometryFile = data))
+      .catch(() => undefined);
+  }
+
+  function loadField(): void {
+    fetch(api("/api/field"))
+      .then((response) => response.json())
+      .then((data: GeometryData) => (fieldHttp = data))
+      .catch(() => undefined);
+  }
+
+  function loadCameras(): void {
+    fetch(api("/api/cameras"))
+      .then((response) => response.json())
+      .then((data: CamerasPayload) => (camerasHttp = data))
+      .catch(() => undefined);
+  }
+
+  /** Pull everything again right now.
+   *
+   * Switching camera or view changes which image URL is on screen, and that
+   * URL may already be in the browser cache from the last time it was shown.
+   * Moving the cache-busting stamp forward on the interaction itself means the
+   * first frame after a click is fetched fresh rather than being whatever was
+   * cached, and the surrounding panels update with it instead of lagging by a
+   * poll interval.
+   */
+  function refreshNow(): void {
+    cacheBuster = Date.now();
+    loadSnapshots();
+    loadConfig();
+    loadHealth();
+    loadGeometry();
+    loadField();
+    loadCameras();
+  }
+
+  onMount(() => {
     loadSnapshots();
     loadConfig();
     loadHealth();
@@ -1110,7 +1134,7 @@
   <div class="toolbar">
     <label class="camera-picker">
       <span>Camera</span>
-      <select bind:value={selectedCamera}>
+      <select bind:value={selectedCamera} onchange={refreshNow}>
         <option value="combine">Combined ({combined.online}/{combined.count})</option>
         {#each cameraList as camera (camera.camera_id)}
           <option value={String(camera.camera_id)}>
@@ -1170,6 +1194,7 @@
               title={isCombined ? "Select a camera to view diagnostics" : viewLabel(view)}
               onclick={() => {
                 selectedView = view;
+                refreshNow();
               }}
             >
               {viewLabel(view)}
