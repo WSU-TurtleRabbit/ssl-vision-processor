@@ -222,7 +222,15 @@
   );
   let fieldDrawn = $derived<FieldData>({ ...fieldFile, ...(liveGeometry?.field ?? {}) });
 
-  let cameraSource = $derived(cameras ?? camerasHttp);
+  // Prefer whichever source actually has cameras, not merely whichever is
+  // non-null: cameras.out publishes an empty roster before the first
+  // detection arrives, and that empty payload would otherwise mask the
+  // polled copy for the rest of the session.
+  let cameraSource = $derived(
+    (cameras?.cameras.length ?? 0) > 0
+      ? cameras
+      : ((camerasHttp?.cameras.length ?? 0) > 0 ? camerasHttp : cameras ?? camerasHttp),
+  );
 
   // A camera that has sent a detection exists, full stop. The roster is only
   // published once a second and carries the extras (name, address, measured
@@ -669,38 +677,42 @@
       [],
       true,
     );
-    if (optionalLines["halfway"] === true) {
-      drawPath(
-        [
-          [0, -halfWidth, 0],
-          [0, halfWidth, 0],
-        ],
-        "#ffd451",
-        1.7,
-      );
-    }
+    // Optional markings are drawn either way: solid when the carpet actually
+    // has them, dashed when it does not, so the regulation field is there for
+    // orientation without implying the camera should be seeing a line.
+    const optionalDash = (name: string): number[] =>
+      optionalLines[name] === true ? [] : [5, 5];
 
-    if (optionalLines["goal2goal"] === true) {
-      drawPath(
-        [
-          [-halfLength, 0, 0],
-          [halfLength, 0, 0],
-        ],
-        "#ffd451",
-        1.7,
-      );
-    }
+    drawPath(
+      [
+        [0, -halfWidth, 0],
+        [0, halfWidth, 0],
+      ],
+      "#ffd451",
+      1.7,
+      optionalDash("halfway"),
+    );
 
-    if (optionalLines["centercircle"] === true && centerRadius > 0) {
+    drawPath(
+      [
+        [-halfLength, 0, 0],
+        [halfLength, 0, 0],
+      ],
+      "#ffd451",
+      1.7,
+      optionalDash("goal2goal"),
+    );
+
+    if (centerRadius > 0) {
       const circle: Point3[] = [];
       for (let step = 0; step <= 64; step += 1) {
         const angle = (step / 64) * Math.PI * 2;
         circle.push([Math.cos(angle) * centerRadius, Math.sin(angle) * centerRadius, 0]);
       }
-      drawPath(circle, "#ffd451", 1.7, [], true);
+      drawPath(circle, "#ffd451", 1.7, optionalDash("centercircle"), true);
     }
 
-    if (optionalLines["penalty"] === true && penaltyDepth > 0 && penaltyWidth > 0) {
+    if (penaltyDepth > 0 && penaltyWidth > 0) {
       const halfPenaltyWidth = penaltyWidth / 2;
       for (const side of [-1, 1]) {
         drawPath(
@@ -712,6 +724,7 @@
           ],
           "#ff78ae",
           1.7,
+          optionalDash("penalty"),
         );
       }
     }
@@ -879,6 +892,55 @@
       );
       context.stroke();
     }
+
+    // The wrapper only generates markings the carpet actually has, so anything
+    // switched off in optional_field_lines is absent from field_lines. Draw
+    // those dashed from the dimensions instead: the regulation field is useful
+    // for orientation, and dashing keeps it honest about what is painted.
+    const halfLength = length / 2;
+    const halfFieldWidth = fieldWidth / 2;
+    const painted = new Set(
+      (fieldDrawn.field_lines ?? []).map((line) => line.name ?? ""),
+    );
+    context.save();
+    context.setLineDash([6, 5]);
+    context.lineWidth = Math.max(1, Number(fieldDrawn["line_thickness"] ?? 10) * scale);
+    context.strokeStyle = paint;
+    context.globalAlpha = 0.5;
+
+    const dashedLine = (x1: number, y1: number, x2: number, y2: number): void => {
+      context.beginPath();
+      context.moveTo(toX(x1), toY(y1));
+      context.lineTo(toX(x2), toY(y2));
+      context.stroke();
+    };
+
+    if (!painted.has("HalfwayLine")) dashedLine(0, -halfFieldWidth, 0, halfFieldWidth);
+    if (!painted.has("CenterLine")) dashedLine(-halfLength, 0, halfLength, 0);
+
+    const centreRadius = Number(fieldDrawn["center_circle_radius"] ?? 0);
+    const hasCircle = (fieldDrawn.field_arcs ?? []).some(
+      (arc) => arc.name === "CenterCircle",
+    );
+    if (!hasCircle && centreRadius > 0) {
+      context.beginPath();
+      context.arc(toX(0), toY(0), centreRadius * scale, 0, Math.PI * 2);
+      context.stroke();
+    }
+
+    const penaltyDepth = Number(fieldDrawn["penalty_area_depth"] ?? 0);
+    const penaltyWidth = Number(fieldDrawn["penalty_area_width"] ?? 0);
+    if (!painted.has("LeftPenaltyStretch") && penaltyDepth > 0 && penaltyWidth > 0) {
+      const halfPenalty = penaltyWidth / 2;
+      for (const side of [-1, 1]) {
+        const outer = side * halfLength;
+        const inner = side * (halfLength - penaltyDepth);
+        dashedLine(outer, -halfPenalty, inner, -halfPenalty);
+        dashedLine(inner, -halfPenalty, inner, halfPenalty);
+        dashedLine(inner, halfPenalty, outer, halfPenalty);
+      }
+    }
+    context.restore();
 
     // Goals, which the geometry describes by size rather than as lines.
     const goalWidth = Number(fieldDrawn["goal_width"] ?? 0);
