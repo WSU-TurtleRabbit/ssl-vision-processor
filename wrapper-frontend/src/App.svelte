@@ -116,12 +116,6 @@
     services: Record<string, ServiceHealth>;
   }
 
-  interface TrailPoint {
-    x: number;
-    y: number;
-    t: number;
-  }
-
   /** A robot we have seen, kept briefly after it stops being detected. */
   interface TrackedRobot {
     key: string;
@@ -134,7 +128,6 @@
     height: number;
     camera: number;
     lastSeen: number;
-    trail: TrailPoint[];
   }
 
   // A robot greys out this long after its last detection, and is dropped
@@ -142,10 +135,6 @@
   // keeps the display from flickering at ~20 fps.
   const STALE_MS = 250;
   const DROP_MS = 1000;
-  // How much recent motion to keep behind each object. Long enough to read a
-  // direction at a glance, short enough that a robot circling does not draw
-  // over the whole field.
-  const TRAIL_MS = 1200;
 
   const wrapperPacket = topic<WrapperPacket>("wrapper_packet.out");
   const detectionPacket = topic<DetectionFrame>("detection.in");
@@ -167,7 +156,10 @@
   // Seed from the URL so a particular camera and view can be linked to, and
   // so a reload lands back where you were rather than on the combined field.
   const initialParams = new URLSearchParams(location.search);
-  let selectedCamera = $state<string>(initialParams.get("camera") ?? "combine");
+  // "" means no camera chosen yet, which only happens before the first one
+  // reports. There is no combined mode any more: this page shows one camera's
+  // processing at a time, which is what the diagnostic views describe.
+  let selectedCamera = $state<string>(initialParams.get("camera") ?? "");
   let selectedView = $state(initialParams.get("view") ?? "overlay");
   // The C++ side rewrites the debug images every debug_stream_interval_ms
   // (100 ms on this setup). Refreshing them once a second left the picture
@@ -202,7 +194,6 @@
     servedBundle !== null && runningBundle !== null && servedBundle !== runningBundle,
   );
   let camerasHttp = $state<CamerasPayload | null>(null);
-  let fieldCanvas = $state<HTMLCanvasElement>();
   let overlayCanvas = $state<HTMLCanvasElement>();
 
   // Last frame that finished loading, per camera and view. Deliberately not
@@ -215,6 +206,45 @@
   // means the view degrades to "slightly stale" instead of "empty", and
   // switching back to a view you have already seen paints instantly.
   const frameCache: Record<string, HTMLImageElement> = {};
+
+  /** Offscreen layers for the parts of a drawing that do not change per frame.
+   *
+   * The carpet, field lines and goals depend only on geometry and canvas size;
+   * the projected overlay depends only on geometry and calibration. Redrawing
+   * them every animation frame meant re-running the projection for every point
+   * of every line 60 times a second to produce an identical picture. They are
+   * rendered once into their own canvas and blitted afterwards, leaving only
+   * the moving objects to draw per frame.
+   */
+  interface StaticLayer {
+    canvas: HTMLCanvasElement;
+    key: string;
+  }
+
+  const layers: Record<string, StaticLayer> = {};
+
+  function staticLayer(
+    name: string,
+    key: string,
+    width: number,
+    height: number,
+    render: (context: CanvasRenderingContext2D) => void,
+  ): HTMLCanvasElement | null {
+    if (width <= 0 || height <= 0) return null;
+    const full = `${key}|${String(width)}x${String(height)}`;
+    const existing = layers[name];
+    if (existing?.key === full) return existing.canvas;
+
+    const canvas = existing?.canvas ?? document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.clearRect(0, 0, width, height);
+    render(context);
+    layers[name] = { canvas, key: full };
+    return canvas;
+  }
   let inFlight = "";
   let lastPump = 0;
 
@@ -227,7 +257,6 @@
   // moment the detector runs anywhere else - which is the whole point of the
   // multi-camera setup. Robots already age off a local stamp; balls now do too.
   let frameArrivedAt = $state<Record<number, number>>({});
-  let ballTrails = $state<Record<number, TrailPoint[]>>({});
   let tracked = $state<Record<string, TrackedRobot>>({});
   let lastUpdate = $state<number | null>(null);
 
@@ -332,7 +361,7 @@
     return ids.sort((a, b) => a - b);
   });
 
-  let isCombined = $derived(selectedCamera === "combine");
+  let isCombined = $derived(selectedCamera === "");
   let selectedCameraId = $derived(isCombined ? null : Number(selectedCamera));
   let selectedStatus = $derived(
     cameraList.find((camera) => camera.camera_id === selectedCameraId),
@@ -412,7 +441,6 @@
         lastReactive = drawClock;
         now = drawClock;
       }
-      drawField();
       drawFieldOverlay();
       frame = requestAnimationFrame(tick);
     };
@@ -425,6 +453,14 @@
   // Views are per camera and not every camera writes every view, so a stale
   // selection would leave the stage blank after switching. Fall back to the
   // first view this camera actually has.
+  // Select the first camera as soon as one is known, so the page lands on
+  // something rather than waiting for a click.
+  $effect(() => {
+    if (!isCombined) return;
+    const first = selectableCameraIds[0];
+    if (first !== undefined) selectedCamera = String(first);
+  });
+
   $effect(() => {
     if (isCombined) return;
     // Until the snapshot list has loaded we do not know which views this
@@ -446,43 +482,23 @@
       for (const robot of robots) {
         const id = robot.robot_id ?? -1;
         const key = `${team}-${String(id)}`;
-        const x = robot.x ?? 0;
-        const y = robot.y ?? 0;
-        // Reported positions only - never interpolated. An operator watching
-        // for tracking glitches has to be able to trust that every point drawn
-        // is one the detector actually produced.
-        const trail = [...(next[key]?.trail ?? []), { x, y, t: stamp }].filter(
-          (point) => stamp - point.t <= TRAIL_MS,
-        );
         next[key] = {
           key,
           team,
           id,
-          x,
-          y,
+          x: robot.x ?? 0,
+          y: robot.y ?? 0,
           orientation: robot.orientation ?? 0,
           confidence: robot.confidence ?? 0,
           height: robot.height ?? 0,
           camera,
           lastSeen: stamp,
-          trail,
         };
       }
     };
     record("blue", frame.robots_blue ?? []);
     record("yellow", frame.robots_yellow ?? []);
 
-    const firstBall = (frame.balls ?? [])[0];
-    if (firstBall) {
-      const previous = ballTrails[camera] ?? [];
-      ballTrails = {
-        ...ballTrails,
-        [camera]: [
-          ...previous,
-          { x: firstBall.x ?? 0, y: firstBall.y ?? 0, t: stamp },
-        ].filter((point) => stamp - point.t <= TRAIL_MS),
-      };
-    }
     tracked = Object.fromEntries(
       Object.entries(next).filter(([, robot]) => stamp - robot.lastSeen <= DROP_MS),
     );
@@ -719,192 +735,163 @@
     context.lineJoin = "round";
     context.lineCap = "round";
 
-    const drawPath = (
-      points: Point3[],
-      stroke: string,
-      lineWidth = 2,
-      dash: number[] = [],
-      close = false,
-    ): void => {
-      const projected = points
-        .map(projectFieldPoint)
-        .filter((point): point is [number, number] => point !== null);
-      const first = projected[0];
-      if (projected.length < 2 || !first) return;
-      context.beginPath();
-      context.moveTo(first[0], first[1]);
-      for (const point of projected.slice(1)) context.lineTo(point[0], point[1]);
-      if (close) context.closePath();
-      context.setLineDash(dash);
-      // Dark halo first, so the line stays readable over pale carpet.
-      context.strokeStyle = "rgba(0, 0, 0, 0.78)";
-      context.lineWidth = lineWidth + 3;
-      context.stroke();
-      context.strokeStyle = stroke;
-      context.lineWidth = lineWidth;
-      context.stroke();
-      context.setLineDash([]);
-    };
+    // The projected geometry depends only on the field, the calibration and
+    // the tuned corners - none of which change between frames - but drawing it
+    // re-runs the projection for every point of every line. Cache it as a
+    // transparent layer over the photo.
+    const geometryKey = [
+      JSON.stringify(cameraCalibration),
+      JSON.stringify(geometryConfig["line_corners"] ?? []),
+      JSON.stringify(geometryConfig["outer_line_corners"] ?? []),
+      JSON.stringify(optionalLines),
+      valueNumber(fieldDrawn["field_length"]),
+      valueNumber(fieldDrawn["field_width"]),
+      valueNumber(fieldDrawn["boundary_width"]),
+      valueNumber(fieldDrawn["goal_width"]),
+      valueNumber(fieldDrawn["goal_depth"]),
+      valueNumber(fieldDrawn["penalty_area_depth"]),
+      valueNumber(fieldDrawn["penalty_area_width"]),
+      valueNumber(fieldDrawn["center_circle_radius"]),
+    ].join("|");
 
-    const fieldLength = valueNumber(fieldDrawn["field_length"]);
-    const fieldWidth = valueNumber(fieldDrawn["field_width"]);
-    if (fieldLength <= 0 || fieldWidth <= 0) return;
-    const halfLength = fieldLength / 2;
-    const halfWidth = fieldWidth / 2;
-    const boundary = valueNumber(fieldDrawn["boundary_width"]);
-    const goalWidth = valueNumber(fieldDrawn["goal_width"]);
-    const goalDepth = valueNumber(fieldDrawn["goal_depth"]);
-    const penaltyDepth = valueNumber(fieldDrawn["penalty_area_depth"]);
-    const penaltyWidth = valueNumber(fieldDrawn["penalty_area_width"]);
-    const centerRadius = valueNumber(fieldDrawn["center_circle_radius"]);
-
-    drawPath(
-      [
-        [-halfLength - boundary, -halfWidth - boundary, 0],
-        [halfLength + boundary, -halfWidth - boundary, 0],
-        [halfLength + boundary, halfWidth + boundary, 0],
-        [-halfLength - boundary, halfWidth + boundary, 0],
-      ],
-      "#4dd8a0",
-      1.5,
-      [8, 6],
-      true,
-    );
-
-    drawPath(
-      [
-        [-halfLength, -halfWidth, 0],
-        [halfLength, -halfWidth, 0],
-        [halfLength, halfWidth, 0],
-        [-halfLength, halfWidth, 0],
-      ],
-      "#f4f7f5",
-      2.2,
-      [],
-      true,
-    );
-    // Optional markings are drawn either way: solid when the carpet actually
-    // has them, dashed when it does not, so the regulation field is there for
-    // orientation without implying the camera should be seeing a line.
-    const optionalDash = (name: string): number[] =>
-      optionalLines[name] === true ? [] : [5, 5];
-
-    drawPath(
-      [
-        [0, -halfWidth, 0],
-        [0, halfWidth, 0],
-      ],
-      "#ffd451",
-      1.7,
-      optionalDash("halfway"),
-    );
-
-    drawPath(
-      [
-        [-halfLength, 0, 0],
-        [halfLength, 0, 0],
-      ],
-      "#ffd451",
-      1.7,
-      optionalDash("goal2goal"),
-    );
-
-    if (centerRadius > 0) {
-      const circle: Point3[] = [];
-      for (let step = 0; step <= 64; step += 1) {
-        const angle = (step / 64) * Math.PI * 2;
-        circle.push([Math.cos(angle) * centerRadius, Math.sin(angle) * centerRadius, 0]);
-      }
-      drawPath(circle, "#ffd451", 1.7, optionalDash("centercircle"), true);
-    }
-
-    if (penaltyDepth > 0 && penaltyWidth > 0) {
-      const halfPenaltyWidth = penaltyWidth / 2;
-      for (const side of [-1, 1]) {
-        drawPath(
-          [
-            [side * halfLength, -halfPenaltyWidth, 0],
-            [side * (halfLength - penaltyDepth), -halfPenaltyWidth, 0],
-            [side * (halfLength - penaltyDepth), halfPenaltyWidth, 0],
-            [side * halfLength, halfPenaltyWidth, 0],
-          ],
-          "#ff78ae",
-          1.7,
-          optionalDash("penalty"),
-        );
-      }
-    }
-
-    if (goalWidth > 0 && goalDepth > 0) {
-      const halfGoalWidth = goalWidth / 2;
-      for (const side of [-1, 1]) {
-        drawPath(
-          [
-            [side * halfLength, -halfGoalWidth, 0],
-            [side * (halfLength + goalDepth), -halfGoalWidth, 0],
-            [side * (halfLength + goalDepth), halfGoalWidth, 0],
-            [side * halfLength, halfGoalWidth, 0],
-          ],
-          "#40cfff",
-          2.1,
-          [],
-          true,
-        );
-      }
-    }
-
-    // Live detections, projected at their own reported height so a robot
-    // marker sits on the robot rather than on the carpet beneath it.
-    const robotRadius = valueNumber(fieldDrawn["max_robot_radius"], 90);
-    for (const robot of visibleRobots) {
-      const centre = projectFieldPoint([robot.x, robot.y, robot.height]);
-      if (!centre) continue;
-      const edge = projectFieldPoint([robot.x + robotRadius, robot.y, robot.height]);
-      const drawn = edge ? Math.max(4, Math.abs(edge[0] - centre[0])) : 8;
-      const stale = isStale(robot);
-      context.globalAlpha = stale ? 0.4 : 1;
-
-      context.beginPath();
-      context.arc(centre[0], centre[1], drawn, 0, Math.PI * 2);
-      context.fillStyle = robot.team === "blue" ? "#4aa3e8" : "#e5be22";
-      context.fill();
-      context.lineWidth = 2;
-      context.strokeStyle = "rgba(0, 0, 0, 0.8)";
-      context.stroke();
-
-      const nose = projectFieldPoint([
-        robot.x + Math.cos(robot.orientation) * robotRadius * 1.4,
-        robot.y + Math.sin(robot.orientation) * robotRadius * 1.4,
-        robot.height,
-      ]);
-      if (nose) {
+    const geometryLayer = staticLayer("overlay", geometryKey, width, height, (context) => {
+      context.lineJoin = "round";
+      context.lineCap = "round";
+      const drawPath = (
+        points: Point3[],
+        stroke: string,
+        lineWidth = 2,
+        dash: number[] = [],
+        close = false,
+      ): void => {
+        const projected = points
+          .map(projectFieldPoint)
+          .filter((point): point is [number, number] => point !== null);
+        const first = projected[0];
+        if (projected.length < 2 || !first) return;
         context.beginPath();
-        context.moveTo(centre[0], centre[1]);
-        context.lineTo(nose[0], nose[1]);
-        context.strokeStyle = "rgba(0, 0, 0, 0.8)";
-        context.lineWidth = 3;
+        context.moveTo(first[0], first[1]);
+        for (const point of projected.slice(1)) context.lineTo(point[0], point[1]);
+        if (close) context.closePath();
+        context.setLineDash(dash);
+        // Dark halo first, so the line stays readable over pale carpet.
+        context.strokeStyle = "rgba(0, 0, 0, 0.78)";
+        context.lineWidth = lineWidth + 3;
         context.stroke();
+        context.strokeStyle = stroke;
+        context.lineWidth = lineWidth;
+        context.stroke();
+        context.setLineDash([]);
+      };
+
+      const fieldLength = valueNumber(fieldDrawn["field_length"]);
+      const fieldWidth = valueNumber(fieldDrawn["field_width"]);
+      if (fieldLength <= 0 || fieldWidth <= 0) return;
+      const halfLength = fieldLength / 2;
+      const halfWidth = fieldWidth / 2;
+      const boundary = valueNumber(fieldDrawn["boundary_width"]);
+      const goalWidth = valueNumber(fieldDrawn["goal_width"]);
+      const goalDepth = valueNumber(fieldDrawn["goal_depth"]);
+      const penaltyDepth = valueNumber(fieldDrawn["penalty_area_depth"]);
+      const penaltyWidth = valueNumber(fieldDrawn["penalty_area_width"]);
+      const centerRadius = valueNumber(fieldDrawn["center_circle_radius"]);
+
+      drawPath(
+        [
+          [-halfLength - boundary, -halfWidth - boundary, 0],
+          [halfLength + boundary, -halfWidth - boundary, 0],
+          [halfLength + boundary, halfWidth + boundary, 0],
+          [-halfLength - boundary, halfWidth + boundary, 0],
+        ],
+        "#4dd8a0",
+        1.5,
+        [8, 6],
+        true,
+      );
+
+      drawPath(
+        [
+          [-halfLength, -halfWidth, 0],
+          [halfLength, -halfWidth, 0],
+          [halfLength, halfWidth, 0],
+          [-halfLength, halfWidth, 0],
+        ],
+        "#f4f7f5",
+        2.2,
+        [],
+        true,
+      );
+      // Optional markings are drawn either way: solid when the carpet actually
+      // has them, dashed when it does not, so the regulation field is there for
+      // orientation without implying the camera should be seeing a line.
+      const optionalDash = (name: string): number[] =>
+        optionalLines[name] === true ? [] : [5, 5];
+
+      drawPath(
+        [
+          [0, -halfWidth, 0],
+          [0, halfWidth, 0],
+        ],
+        "#ffd451",
+        1.7,
+        optionalDash("halfway"),
+      );
+
+      drawPath(
+        [
+          [-halfLength, 0, 0],
+          [halfLength, 0, 0],
+        ],
+        "#ffd451",
+        1.7,
+        optionalDash("goal2goal"),
+      );
+
+      if (centerRadius > 0) {
+        const circle: Point3[] = [];
+        for (let step = 0; step <= 64; step += 1) {
+          const angle = (step / 64) * Math.PI * 2;
+          circle.push([Math.cos(angle) * centerRadius, Math.sin(angle) * centerRadius, 0]);
+        }
+        drawPath(circle, "#ffd451", 1.7, optionalDash("centercircle"), true);
       }
 
-      context.fillStyle = "#0d1a12";
-      context.font = `700 ${String(Math.max(9, drawn))}px Inter, system-ui, sans-serif`;
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.fillText(String(robot.id), centre[0], centre[1]);
-      context.globalAlpha = 1;
-    }
+      if (penaltyDepth > 0 && penaltyWidth > 0) {
+        const halfPenaltyWidth = penaltyWidth / 2;
+        for (const side of [-1, 1]) {
+          drawPath(
+            [
+              [side * halfLength, -halfPenaltyWidth, 0],
+              [side * (halfLength - penaltyDepth), -halfPenaltyWidth, 0],
+              [side * (halfLength - penaltyDepth), halfPenaltyWidth, 0],
+              [side * halfLength, halfPenaltyWidth, 0],
+            ],
+            "#ff78ae",
+            1.7,
+            optionalDash("penalty"),
+          );
+        }
+      }
 
-    for (const ball of balls) {
-      const centre = projectFieldPoint([ball.x ?? 0, ball.y ?? 0, ball.z ?? 0]);
-      if (!centre) continue;
-      context.beginPath();
-      context.arc(centre[0], centre[1], 5, 0, Math.PI * 2);
-      context.fillStyle = "#e3732f";
-      context.fill();
-      context.lineWidth = 1.5;
-      context.strokeStyle = "#ffffff";
-      context.stroke();
-    }
+      if (goalWidth > 0 && goalDepth > 0) {
+        const halfGoalWidth = goalWidth / 2;
+        for (const side of [-1, 1]) {
+          drawPath(
+            [
+              [side * halfLength, -halfGoalWidth, 0],
+              [side * (halfLength + goalDepth), -halfGoalWidth, 0],
+              [side * (halfLength + goalDepth), halfGoalWidth, 0],
+              [side * halfLength, halfGoalWidth, 0],
+            ],
+            "#40cfff",
+            2.1,
+            [],
+            true,
+          );
+        }
+      }
+    });
+    if (geometryLayer) context.drawImage(geometryLayer, 0, 0);
 
     // The tuned corner pixels themselves, so a bad calibration is obvious.
     const inputCorners =
@@ -923,234 +910,6 @@
         context.lineWidth = 1.5;
         context.stroke();
       }
-    }
-  }
-
-  /** Draw the field and everything on it, top-down, in field coordinates. */
-  function drawField(): void {
-    const canvas = fieldCanvas;
-    if (!canvas || !isCombined) return;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-
-    const ratio = window.devicePixelRatio || 1;
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
-    if (width === 0 || height === 0) return;
-    const backingWidth = Math.round(width * ratio);
-    const backingHeight = Math.round(height * ratio);
-    if (canvas.width !== backingWidth) canvas.width = backingWidth;
-    if (canvas.height !== backingHeight) canvas.height = backingHeight;
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    context.clearRect(0, 0, width, height);
-
-    const styles = getComputedStyle(canvas);
-    const carpet = styles.getPropertyValue("--field-carpet").trim() || "#17612f";
-    const paint = styles.getPropertyValue("--field-paint").trim() || "#ffffff";
-
-    context.fillStyle = carpet;
-    context.fillRect(0, 0, width, height);
-
-    const length = Number(fieldDrawn["field_length"] ?? 0);
-    const fieldWidth = Number(fieldDrawn["field_width"] ?? 0);
-    if (!length || !fieldWidth) {
-      context.fillStyle = styles.getPropertyValue("--text-muted").trim() || "#7d9188";
-      context.font = "13px Inter, system-ui, sans-serif";
-      context.textAlign = "center";
-      context.fillText("Waiting for field geometry", width / 2, height / 2);
-      return;
-    }
-
-    const boundary = Number(fieldDrawn["boundary_width"] ?? 0);
-    const totalLength = length + boundary * 2;
-    const totalWidth = fieldWidth + boundary * 2;
-    const scale = Math.min(width / totalLength, height / totalWidth) * 0.97;
-    const toX = (x: number) => width / 2 + x * scale;
-    const toY = (y: number) => height / 2 - y * scale;
-
-    // The playing surface inside the boundary, a touch brighter than the
-    // surround so the run-off area is legible without an extra outline.
-    context.fillStyle = styles.getPropertyValue("--field-inner").trim() || "#1c7a3e";
-    context.fillRect(
-      toX(-length / 2),
-      toY(fieldWidth / 2),
-      length * scale,
-      fieldWidth * scale,
-    );
-
-    context.strokeStyle = paint;
-    context.lineWidth = Math.max(1, Number(fieldDrawn["line_thickness"] ?? 10) * scale);
-    context.lineCap = "round";
-
-    for (const line of fieldDrawn.field_lines ?? []) {
-      context.beginPath();
-      context.moveTo(toX(line.p1?.x ?? 0), toY(line.p1?.y ?? 0));
-      context.lineTo(toX(line.p2?.x ?? 0), toY(line.p2?.y ?? 0));
-      context.stroke();
-    }
-
-    for (const arc of fieldDrawn.field_arcs ?? []) {
-      context.beginPath();
-      context.arc(
-        toX(arc.center?.x ?? 0),
-        toY(arc.center?.y ?? 0),
-        (arc.radius ?? 0) * scale,
-        -(arc.a2 ?? 0),
-        -(arc.a1 ?? 0),
-      );
-      context.stroke();
-    }
-
-    // The wrapper only generates markings the carpet actually has, so anything
-    // switched off in optional_field_lines is absent from field_lines. Draw
-    // those dashed from the dimensions instead: the regulation field is useful
-    // for orientation, and dashing keeps it honest about what is painted.
-    const halfLength = length / 2;
-    const halfFieldWidth = fieldWidth / 2;
-    const painted = new Set(
-      (fieldDrawn.field_lines ?? []).map((line) => line.name ?? ""),
-    );
-    context.save();
-    context.setLineDash([6, 5]);
-    context.lineWidth = Math.max(1, Number(fieldDrawn["line_thickness"] ?? 10) * scale);
-    context.strokeStyle = paint;
-    context.globalAlpha = 0.5;
-
-    const dashedLine = (x1: number, y1: number, x2: number, y2: number): void => {
-      context.beginPath();
-      context.moveTo(toX(x1), toY(y1));
-      context.lineTo(toX(x2), toY(y2));
-      context.stroke();
-    };
-
-    if (!painted.has("HalfwayLine")) dashedLine(0, -halfFieldWidth, 0, halfFieldWidth);
-    if (!painted.has("CenterLine")) dashedLine(-halfLength, 0, halfLength, 0);
-
-    const centreRadius = Number(fieldDrawn["center_circle_radius"] ?? 0);
-    const hasCircle = (fieldDrawn.field_arcs ?? []).some(
-      (arc) => arc.name === "CenterCircle",
-    );
-    if (!hasCircle && centreRadius > 0) {
-      context.beginPath();
-      context.arc(toX(0), toY(0), centreRadius * scale, 0, Math.PI * 2);
-      context.stroke();
-    }
-
-    const penaltyDepth = Number(fieldDrawn["penalty_area_depth"] ?? 0);
-    const penaltyWidth = Number(fieldDrawn["penalty_area_width"] ?? 0);
-    if (!painted.has("LeftPenaltyStretch") && penaltyDepth > 0 && penaltyWidth > 0) {
-      const halfPenalty = penaltyWidth / 2;
-      for (const side of [-1, 1]) {
-        const outer = side * halfLength;
-        const inner = side * (halfLength - penaltyDepth);
-        dashedLine(outer, -halfPenalty, inner, -halfPenalty);
-        dashedLine(inner, -halfPenalty, inner, halfPenalty);
-        dashedLine(inner, halfPenalty, outer, halfPenalty);
-      }
-    }
-    context.restore();
-
-    // Goals, which the geometry describes by size rather than as lines.
-    const goalWidth = Number(fieldDrawn["goal_width"] ?? 0);
-    const goalDepth = Number(fieldDrawn["goal_depth"] ?? 0);
-    if (goalWidth && goalDepth) {
-      context.strokeStyle = styles.getPropertyValue("--goal").trim() || "#40cfff";
-      context.lineWidth = Math.max(1.5, 20 * scale);
-      for (const side of [-1, 1]) {
-        const x = (side * length) / 2;
-        context.beginPath();
-        context.moveTo(toX(x), toY(-goalWidth / 2));
-        context.lineTo(toX(x + side * goalDepth), toY(-goalWidth / 2));
-        context.lineTo(toX(x + side * goalDepth), toY(goalWidth / 2));
-        context.lineTo(toX(x), toY(goalWidth / 2));
-        context.stroke();
-      }
-    }
-
-    const robotRadius = Number(fieldDrawn["max_robot_radius"] ?? 90);
-    const robotRadiusPx = robotRadius * scale;
-    // An SSL robot is a cylinder with the front flattened for the dribbler,
-    // so draw the same shape rather than a plain disc: the flat edge shows
-    // heading without needing a separate marker.
-    const dribblerOffset = Math.min(73, robotRadius * 0.81);
-    const halfFront = Math.acos(dribblerOffset / robotRadius);
-
-    // Trails first, so each object sits on top of its own history. Older
-    // segments fade, which shows direction of travel without an arrowhead:
-    // the bright end is where the object is now. Every point is a position
-    // the detector actually reported - nothing here is interpolated.
-    const drawTrail = (points: TrailPoint[], color: string): void => {
-      for (let i = 1; i < points.length; i += 1) {
-        const from = points[i - 1];
-        const to = points[i];
-        if (!from || !to) continue;
-        context.globalAlpha = Math.max(0, 0.5 * (1 - (drawClock - to.t) / TRAIL_MS));
-        context.beginPath();
-        context.moveTo(toX(from.x), toY(from.y));
-        context.lineTo(toX(to.x), toY(to.y));
-        context.strokeStyle = color;
-        context.lineWidth = Math.max(1.5, robotRadiusPx * 0.45);
-        context.lineCap = "round";
-        context.stroke();
-      }
-      context.globalAlpha = 1;
-    };
-
-    for (const robot of visibleRobots) {
-      drawTrail(robot.trail, robot.team === "blue" ? "#4aa3e8" : "#e5be22");
-    }
-    for (const [key, points] of Object.entries(ballTrails)) {
-      if (selectedCameraId !== null && Number(key) !== selectedCameraId) continue;
-      drawTrail(points, "#e3732f");
-    }
-
-    for (const robot of visibleRobots) {
-      const stale = isStale(robot);
-      const base =
-        robot.team === "blue"
-          ? styles.getPropertyValue("--blue").trim() || "#4aa3e8"
-          : styles.getPropertyValue("--yellow").trim() || "#e5be22";
-      const radius = robotRadiusPx;
-      context.globalAlpha = stale ? 0.4 : 1;
-
-      // Canvas y grows downwards while field y grows up, so angles are
-      // negated to keep the drawn heading matching the reported one.
-      const heading = -robot.orientation;
-      context.beginPath();
-      context.arc(
-        toX(robot.x),
-        toY(robot.y),
-        radius,
-        heading + halfFront,
-        heading - halfFront + Math.PI * 2,
-      );
-      context.closePath();
-      context.fillStyle = base;
-      context.fill();
-      context.lineWidth = Math.max(1, radius * 0.12);
-      context.strokeStyle = stale ? "#8fa39a" : "#0d1a12";
-      context.stroke();
-
-      context.fillStyle = "#0d1a12";
-      context.font = `700 ${String(Math.max(8, radius * 1.1))}px Inter, system-ui, sans-serif`;
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.fillText(String(robot.id), toX(robot.x), toY(robot.y));
-      context.globalAlpha = 1;
-    }
-
-    const ballRadius = Number(fieldDrawn["ball_radius"] ?? 21.5);
-    for (const ball of balls) {
-      // A real ball is 21.5 mm, only a few pixels at field scale, so enforce a
-      // floor: it has to stay findable on a full-field view.
-      const drawn = Math.max(3.5, ballRadius * scale);
-      context.beginPath();
-      context.arc(toX(ball.x ?? 0), toY(ball.y ?? 0), drawn, 0, Math.PI * 2);
-      context.fillStyle = styles.getPropertyValue("--orange").trim() || "#e3732f";
-      context.fill();
-      context.lineWidth = Math.max(1, drawn * 0.3);
-      context.strokeStyle = "#0d1a12";
-      context.stroke();
     }
   }
 
@@ -1367,7 +1126,7 @@
     };
     document.addEventListener("visibilitychange", onVisibility);
     const resize = () => {
-      drawField();
+      drawFieldOverlay();
     };
     window.addEventListener("resize", resize);
 
@@ -1428,16 +1187,6 @@
   <div class="toolbar">
     <div class="picker" role="group" aria-label="Camera">
       <span class="picker-label">Camera</span>
-      <button
-        class:active={isCombined}
-        aria-pressed={isCombined}
-        onclick={() => {
-          selectedCamera = "combine";
-          refreshNow();
-        }}
-      >
-        Combined ({combined.online}/{combined.count})
-      </button>
       {#each selectableCameraIds as id (id)}
         <button
           class:active={!isCombined && selectedCameraId === id}
@@ -1526,9 +1275,9 @@
           {/each}
         </nav>
 
-        <div class="image-stage" class:field-stage={isCombined}>
+        <div class="image-stage">
           {#if isCombined}
-            <canvas bind:this={fieldCanvas} aria-label="Top-down field view"></canvas>
+            <p>Waiting for a camera to report.</p>
           {:else}
             <div class="overlay-stage">
               <canvas
@@ -1549,78 +1298,67 @@
         </div>
       </section>
 
-      {#if isCombined}
-        <section class="panel combine-note">
-          <p>
-            Camera input, solved model, thresholds and colour references are
-            per camera &mdash; each processor reads its own config file, so
-            there is no combined value to show. Pick a camera above to see
-            its configuration.
-          </p>
-        </section>
-      {:else}
-        <section class="panel">
-          <div class="section-heading compact">
-            <h2>Camera input</h2>
-            <span class="section-tag">{baseName(health?.vision_config ?? configPayload?.path)}</span>
-          </div>
-          <dl class="property-grid wide">
-            <div><dt>Driver</dt><dd>{text(cameraConfig["driver"])}</dd></div>
-            <div><dt>Device</dt><dd>{text(cameraConfig["path"])}</dd></div>
-            <div><dt>Capture</dt><dd>{number(cameraConfig["width"])} x {number(cameraConfig["height"])}</dd></div>
-            <div><dt>Processing</dt><dd>{number(cameraConfig["output_width"])} x {number(cameraConfig["output_height"])}</dd></div>
-            <div><dt>Configured rate</dt><dd>{number(cameraConfig["fps"])} fps</dd></div>
-            <div><dt>Format</dt><dd>{text(cameraConfig["fourcc"])}</dd></div>
-            <div><dt>Exposure</dt><dd>{number(cameraConfig["exposure"], 1)}</dd></div>
-            <div><dt>Gain</dt><dd>{number(cameraConfig["gain"], 1)}</dd></div>
-            <div><dt>Gamma</dt><dd>{number(cameraConfig["gamma"], 1)}</dd></div>
-            <div><dt>White balance</dt><dd>{text(cameraConfig["white_balance"])}</dd></div>
-            <div><dt>Left crop</dt><dd>{text(cameraConfig["crop_left_half"])}</dd></div>
-            <div><dt>Cameras on field</dt><dd>{number(geometryConfig["camera_amount"])}</dd></div>
-          </dl>
-        </section>
+      <section class="panel">
+        <div class="section-heading compact">
+          <h2>Camera input</h2>
+          <span class="section-tag">{baseName(health?.vision_config ?? configPayload?.path)}</span>
+        </div>
+        <dl class="property-grid wide">
+          <div><dt>Driver</dt><dd>{text(cameraConfig["driver"])}</dd></div>
+          <div><dt>Device</dt><dd>{text(cameraConfig["path"])}</dd></div>
+          <div><dt>Capture</dt><dd>{number(cameraConfig["width"])} x {number(cameraConfig["height"])}</dd></div>
+          <div><dt>Processing</dt><dd>{number(cameraConfig["output_width"])} x {number(cameraConfig["output_height"])}</dd></div>
+          <div><dt>Configured rate</dt><dd>{number(cameraConfig["fps"])} fps</dd></div>
+          <div><dt>Format</dt><dd>{text(cameraConfig["fourcc"])}</dd></div>
+          <div><dt>Exposure</dt><dd>{number(cameraConfig["exposure"], 1)}</dd></div>
+          <div><dt>Gain</dt><dd>{number(cameraConfig["gain"], 1)}</dd></div>
+          <div><dt>Gamma</dt><dd>{number(cameraConfig["gamma"], 1)}</dd></div>
+          <div><dt>White balance</dt><dd>{text(cameraConfig["white_balance"])}</dd></div>
+          <div><dt>Left crop</dt><dd>{text(cameraConfig["crop_left_half"])}</dd></div>
+          <div><dt>Cameras on field</dt><dd>{number(geometryConfig["camera_amount"])}</dd></div>
+        </dl>
+      </section>
 
-        <section class="panel">
-          <div class="section-heading compact"><h2>Solved camera model</h2></div>
-          <dl class="property-grid wide">
-            <div><dt>Focal length</dt><dd>{number(cameraCalibration["focal_length"], 2)}</dd></div>
-            <div><dt>Principal point</dt><dd>{number(cameraCalibration["principal_point_x"], 1)}, {number(cameraCalibration["principal_point_y"], 1)}</dd></div>
-            <div><dt>Image size</dt><dd>{number(cameraCalibration["pixel_image_width"])} x {number(cameraCalibration["pixel_image_height"])}</dd></div>
-            <div><dt>Distortion</dt><dd>{number(cameraCalibration["distortion"], 4)}</dd></div>
-            <div><dt>Camera height</dt><dd>{number(geometryConfig["camera_height"], 0)} mm</dd></div>
-            <div><dt>Translation</dt><dd>{number(cameraCalibration["tx"], 0)}, {number(cameraCalibration["ty"], 0)}, {number(cameraCalibration["tz"], 0)}</dd></div>
-          </dl>
-          <div class="corner-list">
-            <span>Field corners px</span>
-            <code>{JSON.stringify(geometryConfig["line_corners"] ?? [])}</code>
-          </div>
-        </section>
+      <section class="panel">
+        <div class="section-heading compact"><h2>Solved camera model</h2></div>
+        <dl class="property-grid wide">
+          <div><dt>Focal length</dt><dd>{number(cameraCalibration["focal_length"], 2)}</dd></div>
+          <div><dt>Principal point</dt><dd>{number(cameraCalibration["principal_point_x"], 1)}, {number(cameraCalibration["principal_point_y"], 1)}</dd></div>
+          <div><dt>Image size</dt><dd>{number(cameraCalibration["pixel_image_width"])} x {number(cameraCalibration["pixel_image_height"])}</dd></div>
+          <div><dt>Distortion</dt><dd>{number(cameraCalibration["distortion"], 4)}</dd></div>
+          <div><dt>Camera height</dt><dd>{number(geometryConfig["camera_height"], 0)} mm</dd></div>
+          <div><dt>Translation</dt><dd>{number(cameraCalibration["tx"], 0)}, {number(cameraCalibration["ty"], 0)}, {number(cameraCalibration["tz"], 0)}</dd></div>
+        </dl>
+        <div class="corner-list">
+          <span>Field corners px</span>
+          <code>{JSON.stringify(geometryConfig["line_corners"] ?? [])}</code>
+        </div>
+      </section>
 
-        <section class="panel">
-          <div class="section-heading compact"><h2>Detection thresholds</h2></div>
-          <dl class="property-grid wide">
-            <div><dt>Circularity</dt><dd>{number(thresholdConfig["circularity"], 1)}</dd></div>
-            <div><dt>Score</dt><dd>{number(thresholdConfig["score"], 1)}</dd></div>
-            <div><dt>Confidence</dt><dd>{number(thresholdConfig["min_confidence"], 2)}</dd></div>
-            <div><dt>Blob limit</dt><dd>{number(thresholdConfig["blobs"])}</dd></div>
-            <div><dt>Edge distance</dt><dd>{number(thresholdConfig["min_cam_edge_distance"])}</dd></div>
-            <div><dt>Clipping</dt><dd>{number(thresholdConfig["clipping_tolerance"], 1)}</dd></div>
-          </dl>
-        </section>
+      <section class="panel">
+        <div class="section-heading compact"><h2>Detection thresholds</h2></div>
+        <dl class="property-grid wide">
+          <div><dt>Circularity</dt><dd>{number(thresholdConfig["circularity"], 1)}</dd></div>
+          <div><dt>Score</dt><dd>{number(thresholdConfig["score"], 1)}</dd></div>
+          <div><dt>Confidence</dt><dd>{number(thresholdConfig["min_confidence"], 2)}</dd></div>
+          <div><dt>Blob limit</dt><dd>{number(thresholdConfig["blobs"])}</dd></div>
+          <div><dt>Edge distance</dt><dd>{number(thresholdConfig["min_cam_edge_distance"])}</dd></div>
+          <div><dt>Clipping</dt><dd>{number(thresholdConfig["clipping_tolerance"], 1)}</dd></div>
+        </dl>
+      </section>
 
-        <section class="panel">
-          <div class="section-heading compact"><h2>Color references</h2></div>
-          <div class="color-list">
-            {#each colorNames as name (name)}
-              <div class="color-row">
-                <span class="swatch" style={`background: ${colorCss(colorConfig[name])}`}></span>
-                <span>{name}</span>
-                <code>{JSON.stringify(colorConfig[name] ?? [])}</code>
-              </div>
-            {/each}
-          </div>
-        </section>
-      {/if}
+      <section class="panel">
+        <div class="section-heading compact"><h2>Color references</h2></div>
+        <div class="color-list">
+          {#each colorNames as name (name)}
+            <div class="color-row">
+              <span class="swatch" style={`background: ${colorCss(colorConfig[name])}`}></span>
+              <span>{name}</span>
+              <code>{JSON.stringify(colorConfig[name] ?? [])}</code>
+            </div>
+          {/each}
+        </div>
+      </section>
     </div>
 
     <aside class="inspector">
@@ -2246,23 +1984,9 @@
     overflow: hidden;
   }
 
-  /* Combining shows only the field, so give it the room the per-camera
-     panels would otherwise take. */
-  .image-stage.field-stage {
-    aspect-ratio: auto;
-    height: min(72vh, 760px);
-  }
-
-  .combine-note {
-    padding: 14px 16px;
-  }
-
-  .combine-note p {
-    margin: 0;
-    max-width: 60ch;
-    color: var(--text-secondary);
-    font-size: 12.5px;
-    line-height: 1.55;
+  .image-stage p {
+    color: var(--text-muted);
+    font-size: 13px;
   }
 
   .image-stage canvas {
