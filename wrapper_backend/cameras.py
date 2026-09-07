@@ -20,6 +20,8 @@ import socket
 import time
 from typing import Any
 
+from aiohttp import web
+
 from wrapper_backend.bus import Bus
 
 log = logging.getLogger("wrapper_backend.cameras")
@@ -123,28 +125,33 @@ class Cameras:
                 self._resolving.add(address)
                 asyncio.create_task(self._resolve_hostname(camera, address))
 
+    def roster(self) -> dict[str, Any]:
+        """Current camera state, for the bus and the HTTP endpoint alike."""
+        now = time.monotonic()
+        cameras = [c.to_dict(now) for c in self._cameras.values()]
+        cameras.sort(key=lambda c: c["camera_id"])
+        online = [c for c in cameras if c["online"]]
+        return {
+            "cameras": cameras,
+            "combined": {
+                "count": len(cameras),
+                "online": len(online),
+                "fps": round(sum(c["fps"] for c in online), 1),
+                "latency_ms": (
+                    round(max(c["latency_ms"] for c in online), 1) if online else 0.0
+                ),
+            },
+        }
+
+    def register(self, http_app: web.Application) -> None:
+        async def cameras_handler(_: web.Request) -> web.Response:
+            return web.json_response(self.roster())
+
+        http_app.router.add_get("/api/cameras", cameras_handler)
+
     async def _publish_loop(self) -> None:
         while True:
-            now = time.monotonic()
-            roster = [c.to_dict(now) for c in self._cameras.values()]
-            roster.sort(key=lambda c: c["camera_id"])
-            online = [c for c in roster if c["online"]]
-            self._bus.publish(
-                "cameras.out",
-                {
-                    "cameras": roster,
-                    "combined": {
-                        "count": len(roster),
-                        "online": len(online),
-                        "fps": round(sum(c["fps"] for c in online), 1),
-                        "latency_ms": (
-                            round(max(c["latency_ms"] for c in online), 1)
-                            if online
-                            else 0.0
-                        ),
-                    },
-                },
-            )
+            self._bus.publish("cameras.out", self.roster())
             await asyncio.sleep(PUBLISH_INTERVAL_S)
 
     async def run(self) -> None:

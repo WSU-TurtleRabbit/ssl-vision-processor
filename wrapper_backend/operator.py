@@ -44,6 +44,23 @@ def register(
             }
         )
 
+    async def geometry_handler(_: web.Request) -> web.Response:
+        """The geometry yaml as loaded, so field dimensions are readable
+        without waiting for a multicast round trip through the wrapper."""
+        try:
+            config = yaml.safe_load(geometry_config.read_text(encoding="utf-8")) or {}
+            stat = geometry_config.stat()
+        except (OSError, yaml.YAMLError) as exc:
+            return web.json_response({"error": str(exc)}, status=500)
+
+        return web.json_response(
+            {
+                "path": str(geometry_config),
+                "modified_at": stat.st_mtime,
+                "geometry": config,
+            }
+        )
+
     async def health_handler(_: web.Request) -> web.Response:
         images = [
             path
@@ -97,6 +114,7 @@ def register(
         return response
 
     http_app.router.add_get("/api/config", config_handler)
+    http_app.router.add_get("/api/geometry", geometry_handler)
     http_app.router.add_get("/api/health", health_handler)
     http_app.router.add_get("/", index_handler)
 

@@ -93,6 +93,12 @@
     config: DataMap;
   }
 
+  interface GeometryResponse {
+    path: string;
+    modified_at: number;
+    geometry: DataMap;
+  }
+
   interface ServiceHealth {
     running: boolean;
     pid: number | null;
@@ -153,6 +159,12 @@
   let health = $state<HealthResponse | null>(null);
   let geometry = $state<GeometryData | null>(null);
   let cameras = $state<CamerasPayload | null>(null);
+  // HTTP is the floor for both of these. The bus carries them too, but a
+  // browser that falls behind the ~20/s detection stream would otherwise
+  // leave the field dimensions and the camera roster blank indefinitely -
+  // and both should be readable whenever the backend is up at all.
+  let geometryFile = $state<GeometryResponse | null>(null);
+  let camerasHttp = $state<CamerasPayload | null>(null);
   let fieldCanvas = $state<HTMLCanvasElement>();
 
   // Detections arrive per camera and each camera has its own frame counter,
@@ -169,9 +181,18 @@
   let colorConfig = $derived(asRecord(activeConfig["color"]));
   let networkConfig = $derived(asRecord(activeConfig["network"]));
   let streamConfig = $derived(asRecord(activeConfig["stream"]));
-  let field = $derived<FieldData>(geometry?.field ?? {});
-  let cameraList = $derived(cameras?.cameras ?? []);
-  let combined = $derived(cameras?.combined ?? { count: 0, online: 0, fps: 0, latency_ms: 0 });
+  // Live geometry wins when present - it is the merged state the wrapper is
+  // actually broadcasting, and only it carries the drawable lines and arcs.
+  // The yaml underneath keeps the dimensions readable before the first
+  // packet arrives.
+  let fieldFile = $derived(asRecord(geometryFile?.geometry["field"]));
+  let field = $derived<FieldData>({ ...fieldFile, ...(geometry?.field ?? {}) });
+
+  let cameraSource = $derived(cameras ?? camerasHttp);
+  let cameraList = $derived(cameraSource?.cameras ?? []);
+  let combined = $derived(
+    cameraSource?.combined ?? { count: 0, online: 0, fps: 0, latency_ms: 0 },
+  );
 
   // Calibration is published per camera; match it to the selection rather
   // than always reading calib[0], which is only correct for one camera.
@@ -534,13 +555,29 @@
         .then((data: HealthResponse) => (health = data))
         .catch(() => undefined);
     };
+    const loadGeometry = () => {
+      fetch(api("/api/geometry"))
+        .then((response) => response.json())
+        .then((data: GeometryResponse) => (geometryFile = data))
+        .catch(() => undefined);
+    };
+    const loadCameras = () => {
+      fetch(api("/api/cameras"))
+        .then((response) => response.json())
+        .then((data: CamerasPayload) => (camerasHttp = data))
+        .catch(() => undefined);
+    };
 
     loadSnapshots();
     loadConfig();
     loadHealth();
+    loadGeometry();
+    loadCameras();
     const snapshotTimer = setInterval(loadSnapshots, 5000);
     const configTimer = setInterval(loadConfig, 5000);
     const healthTimer = setInterval(loadHealth, 2000);
+    const geometryTimer = setInterval(loadGeometry, 5000);
+    const camerasTimer = setInterval(loadCameras, 1000);
     const imageTimer = setInterval(() => {
       cacheBuster = Date.now();
     }, 1000);
@@ -553,6 +590,8 @@
       clearInterval(snapshotTimer);
       clearInterval(configTimer);
       clearInterval(healthTimer);
+      clearInterval(geometryTimer);
+      clearInterval(camerasTimer);
       clearInterval(imageTimer);
       window.removeEventListener("resize", resize);
     };
