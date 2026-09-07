@@ -177,7 +177,17 @@ void CameraModel::updateEuler(const Eigen::Vector3f &euler) {
 }
 
 Eigen::Vector3f CameraModel::getEuler() {
+	// canonicalEulerAngles() only exists from Eigen 3.4 onwards. Older Eigen
+	// (e.g. 3.3.7 on Ubuntu 20.04) provides eulerAngles(), which picks a
+	// different but equivalent triple: both satisfy the reconstruction identity
+	// that updateEuler(getEuler()) restores the original rotation. That is all
+	// the callers need - the angles are only ever used as a Levenberg-Marquardt
+	// parameterisation in GeomModel and as a calibration diagnostic.
+#if EIGEN_VERSION_AT_LEAST(3, 4, 0)
 	return f2iOrientation.toRotationMatrix().canonicalEulerAngles(0, 1, 2);
+#else
+	return f2iOrientation.toRotationMatrix().eulerAngles(0, 1, 2);
+#endif
 }
 
 
