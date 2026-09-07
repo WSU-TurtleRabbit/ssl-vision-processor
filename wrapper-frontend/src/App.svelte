@@ -1319,67 +1319,78 @@
         </div>
       </section>
 
-      <section class="panel">
-        <div class="section-heading compact">
-          <h2>Camera input</h2>
-          <span class="section-tag">{baseName(health?.vision_config ?? configPayload?.path)}</span>
-        </div>
-        <dl class="property-grid wide">
-          <div><dt>Driver</dt><dd>{text(cameraConfig["driver"])}</dd></div>
-          <div><dt>Device</dt><dd>{text(cameraConfig["path"])}</dd></div>
-          <div><dt>Capture</dt><dd>{number(cameraConfig["width"])} x {number(cameraConfig["height"])}</dd></div>
-          <div><dt>Processing</dt><dd>{number(cameraConfig["output_width"])} x {number(cameraConfig["output_height"])}</dd></div>
-          <div><dt>Configured rate</dt><dd>{number(cameraConfig["fps"])} fps</dd></div>
-          <div><dt>Format</dt><dd>{text(cameraConfig["fourcc"])}</dd></div>
-          <div><dt>Exposure</dt><dd>{number(cameraConfig["exposure"], 1)}</dd></div>
-          <div><dt>Gain</dt><dd>{number(cameraConfig["gain"], 1)}</dd></div>
-          <div><dt>Gamma</dt><dd>{number(cameraConfig["gamma"], 1)}</dd></div>
-          <div><dt>White balance</dt><dd>{text(cameraConfig["white_balance"])}</dd></div>
-          <div><dt>Left crop</dt><dd>{text(cameraConfig["crop_left_half"])}</dd></div>
-          <div><dt>Cameras on field</dt><dd>{number(geometryConfig["camera_amount"])}</dd></div>
-        </dl>
-      </section>
+      {#if isCombined}
+        <section class="panel combine-note">
+          <p>
+            Camera input, solved model, thresholds and colour references are
+            per camera &mdash; each processor reads its own config file, so
+            there is no combined value to show. Pick a camera above to see
+            its configuration.
+          </p>
+        </section>
+      {:else}
+        <section class="panel">
+          <div class="section-heading compact">
+            <h2>Camera input</h2>
+            <span class="section-tag">{baseName(health?.vision_config ?? configPayload?.path)}</span>
+          </div>
+          <dl class="property-grid wide">
+            <div><dt>Driver</dt><dd>{text(cameraConfig["driver"])}</dd></div>
+            <div><dt>Device</dt><dd>{text(cameraConfig["path"])}</dd></div>
+            <div><dt>Capture</dt><dd>{number(cameraConfig["width"])} x {number(cameraConfig["height"])}</dd></div>
+            <div><dt>Processing</dt><dd>{number(cameraConfig["output_width"])} x {number(cameraConfig["output_height"])}</dd></div>
+            <div><dt>Configured rate</dt><dd>{number(cameraConfig["fps"])} fps</dd></div>
+            <div><dt>Format</dt><dd>{text(cameraConfig["fourcc"])}</dd></div>
+            <div><dt>Exposure</dt><dd>{number(cameraConfig["exposure"], 1)}</dd></div>
+            <div><dt>Gain</dt><dd>{number(cameraConfig["gain"], 1)}</dd></div>
+            <div><dt>Gamma</dt><dd>{number(cameraConfig["gamma"], 1)}</dd></div>
+            <div><dt>White balance</dt><dd>{text(cameraConfig["white_balance"])}</dd></div>
+            <div><dt>Left crop</dt><dd>{text(cameraConfig["crop_left_half"])}</dd></div>
+            <div><dt>Cameras on field</dt><dd>{number(geometryConfig["camera_amount"])}</dd></div>
+          </dl>
+        </section>
 
-      <section class="panel">
-        <div class="section-heading compact"><h2>Solved camera model</h2></div>
-        <dl class="property-grid wide">
-          <div><dt>Focal length</dt><dd>{number(cameraCalibration["focal_length"], 2)}</dd></div>
-          <div><dt>Principal point</dt><dd>{number(cameraCalibration["principal_point_x"], 1)}, {number(cameraCalibration["principal_point_y"], 1)}</dd></div>
-          <div><dt>Image size</dt><dd>{number(cameraCalibration["pixel_image_width"])} x {number(cameraCalibration["pixel_image_height"])}</dd></div>
-          <div><dt>Distortion</dt><dd>{number(cameraCalibration["distortion"], 4)}</dd></div>
-          <div><dt>Camera height</dt><dd>{number(geometryConfig["camera_height"], 0)} mm</dd></div>
-          <div><dt>Translation</dt><dd>{number(cameraCalibration["tx"], 0)}, {number(cameraCalibration["ty"], 0)}, {number(cameraCalibration["tz"], 0)}</dd></div>
-        </dl>
-        <div class="corner-list">
-          <span>Field corners px</span>
-          <code>{JSON.stringify(geometryConfig["line_corners"] ?? [])}</code>
-        </div>
-      </section>
+        <section class="panel">
+          <div class="section-heading compact"><h2>Solved camera model</h2></div>
+          <dl class="property-grid wide">
+            <div><dt>Focal length</dt><dd>{number(cameraCalibration["focal_length"], 2)}</dd></div>
+            <div><dt>Principal point</dt><dd>{number(cameraCalibration["principal_point_x"], 1)}, {number(cameraCalibration["principal_point_y"], 1)}</dd></div>
+            <div><dt>Image size</dt><dd>{number(cameraCalibration["pixel_image_width"])} x {number(cameraCalibration["pixel_image_height"])}</dd></div>
+            <div><dt>Distortion</dt><dd>{number(cameraCalibration["distortion"], 4)}</dd></div>
+            <div><dt>Camera height</dt><dd>{number(geometryConfig["camera_height"], 0)} mm</dd></div>
+            <div><dt>Translation</dt><dd>{number(cameraCalibration["tx"], 0)}, {number(cameraCalibration["ty"], 0)}, {number(cameraCalibration["tz"], 0)}</dd></div>
+          </dl>
+          <div class="corner-list">
+            <span>Field corners px</span>
+            <code>{JSON.stringify(geometryConfig["line_corners"] ?? [])}</code>
+          </div>
+        </section>
 
-      <section class="panel">
-        <div class="section-heading compact"><h2>Detection thresholds</h2></div>
-        <dl class="property-grid wide">
-          <div><dt>Circularity</dt><dd>{number(thresholdConfig["circularity"], 1)}</dd></div>
-          <div><dt>Score</dt><dd>{number(thresholdConfig["score"], 1)}</dd></div>
-          <div><dt>Confidence</dt><dd>{number(thresholdConfig["min_confidence"], 2)}</dd></div>
-          <div><dt>Blob limit</dt><dd>{number(thresholdConfig["blobs"])}</dd></div>
-          <div><dt>Edge distance</dt><dd>{number(thresholdConfig["min_cam_edge_distance"])}</dd></div>
-          <div><dt>Clipping</dt><dd>{number(thresholdConfig["clipping_tolerance"], 1)}</dd></div>
-        </dl>
-      </section>
+        <section class="panel">
+          <div class="section-heading compact"><h2>Detection thresholds</h2></div>
+          <dl class="property-grid wide">
+            <div><dt>Circularity</dt><dd>{number(thresholdConfig["circularity"], 1)}</dd></div>
+            <div><dt>Score</dt><dd>{number(thresholdConfig["score"], 1)}</dd></div>
+            <div><dt>Confidence</dt><dd>{number(thresholdConfig["min_confidence"], 2)}</dd></div>
+            <div><dt>Blob limit</dt><dd>{number(thresholdConfig["blobs"])}</dd></div>
+            <div><dt>Edge distance</dt><dd>{number(thresholdConfig["min_cam_edge_distance"])}</dd></div>
+            <div><dt>Clipping</dt><dd>{number(thresholdConfig["clipping_tolerance"], 1)}</dd></div>
+          </dl>
+        </section>
 
-      <section class="panel">
-        <div class="section-heading compact"><h2>Color references</h2></div>
-        <div class="color-list">
-          {#each colorNames as name (name)}
-            <div class="color-row">
-              <span class="swatch" style={`background: ${colorCss(colorConfig[name])}`}></span>
-              <span>{name}</span>
-              <code>{JSON.stringify(colorConfig[name] ?? [])}</code>
-            </div>
-          {/each}
-        </div>
-      </section>
+        <section class="panel">
+          <div class="section-heading compact"><h2>Color references</h2></div>
+          <div class="color-list">
+            {#each colorNames as name (name)}
+              <div class="color-row">
+                <span class="swatch" style={`background: ${colorCss(colorConfig[name])}`}></span>
+                <span>{name}</span>
+                <code>{JSON.stringify(colorConfig[name] ?? [])}</code>
+              </div>
+            {/each}
+          </div>
+        </section>
+      {/if}
     </div>
 
     <aside class="inspector">
@@ -1935,8 +1946,23 @@
     overflow: hidden;
   }
 
+  /* Combining shows only the field, so give it the room the per-camera
+     panels would otherwise take. */
   .image-stage.field-stage {
-    aspect-ratio: 2 / 1;
+    aspect-ratio: auto;
+    height: min(72vh, 760px);
+  }
+
+  .combine-note {
+    padding: 14px 16px;
+  }
+
+  .combine-note p {
+    margin: 0;
+    max-width: 60ch;
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    line-height: 1.55;
   }
 
   .image-stage img,
