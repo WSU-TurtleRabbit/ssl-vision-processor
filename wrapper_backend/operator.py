@@ -87,12 +87,32 @@ def register(
                 },
                 status=503,
             )
-        return web.FileResponse(index)
+        response = web.FileResponse(index)
+        # index.html names the fingerprinted bundles, so caching it strands
+        # browsers on a previous build - the exact failure where a rebuilt UI
+        # appears not to deploy until someone force-reloads. "no-cache" still
+        # stores the file but revalidates every time, so the ETag already on
+        # the response turns the usual case into a cheap 304.
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
     http_app.router.add_get("/api/config", config_handler)
     http_app.router.add_get("/api/health", health_handler)
     http_app.router.add_get("/", index_handler)
 
     assets = frontend_dir / "assets"
-    if assets.is_dir():
-        http_app.router.add_static("/assets/", assets, show_index=False)
+
+    async def asset_handler(request: web.Request) -> web.FileResponse:
+        root = assets.resolve()
+        path = (root / request.match_info["filename"]).resolve()
+        # Resolve first, then confirm the result is still inside the asset
+        # directory, so "..", symlinks and absolute names cannot escape it.
+        if root not in path.parents or not path.is_file():
+            raise web.HTTPNotFound
+        response = web.FileResponse(path)
+        # Vite fingerprints every asset filename, so a given URL's bytes never
+        # change and this can be cached indefinitely.
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+    http_app.router.add_get("/assets/{filename}", asset_handler)
