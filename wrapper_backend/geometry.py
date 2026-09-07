@@ -120,6 +120,17 @@ def load_geometry(path: Path) -> SSL_WrapperPacket:
     with path.open("r") as f:
         config = yaml.safe_load(f)
 
+    if "optional_field_lines" not in config:
+        hint = (
+            " This looks like a geom_publisher.py geometry file: it uses"
+            " 'default_lines:', which wrapper_backend renamed to"
+            " 'optional_field_lines:'. Pass the wrapper geometry file instead"
+            " (e.g. geometry-wrapper-lab-divB.yml)."
+            if "default_lines" in config
+            else " All four keys (goal2goal, halfway, centercircle, penalty)"
+            " are required."
+        )
+        raise KeyError(f"{path} has no 'optional_field_lines:' block.{hint}")
     optional_lines = config.pop("optional_field_lines")
     wrapper = SSL_WrapperPacket()
     ParseDict(config, wrapper.geometry)
