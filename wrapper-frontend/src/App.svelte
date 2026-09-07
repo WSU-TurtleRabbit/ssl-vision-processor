@@ -1077,6 +1077,29 @@
     loadCameras();
   }
 
+  /** Reload the page without letting the browser reuse what it has cached.
+   *
+   * location.reload() revalidates but will still happily reuse a cached
+   * index.html, and index.html is what names the fingerprinted bundle - which
+   * is exactly how an old build survives an ordinary refresh. Clearing the
+   * Cache API and then navigating to a URL the browser cannot have seen
+   * before forces the whole thing to come from the server again.
+   */
+  async function hardReload(): Promise<void> {
+    try {
+      if ("caches" in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((key) => caches.delete(key)));
+      }
+    } catch {
+      // Cache API blocked or unavailable; the cache-busting navigation below
+      // is the part that actually matters.
+    }
+    const url = new URL(location.href);
+    url.searchParams.set("_", String(Date.now()));
+    location.replace(url.toString());
+  }
+
   onMount(() => {
     loadSnapshots();
     loadConfig();
@@ -1156,6 +1179,19 @@
       <span class="status-dot"></span>
       Processing {processingHealthy ? "healthy" : "degraded"}
     </span>
+
+    <button class="action" title="Refetch everything now" onclick={refreshNow}>
+      Refresh
+    </button>
+    <button
+      class="action"
+      title="Clear cached files and reload the page from the server"
+      onclick={() => {
+        void hardReload();
+      }}
+    >
+      Clear cache
+    </button>
 
     <span class="config-chip" title={text(health?.vision_config)}>
       <span class="chip-label">config</span>
@@ -1590,6 +1626,23 @@
     cursor: pointer;
   }
 
+  .action {
+    min-height: 28px;
+    padding: 4px 11px;
+    border-radius: 4px;
+    color: var(--text);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-strong);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .action:hover {
+    border-color: var(--accent-strong);
+    background: var(--surface-hover);
+  }
+
+  .action:focus-visible,
   .camera-picker select:focus-visible,
   .view-tabs button:focus-visible {
     outline: 2px solid var(--accent);
