@@ -15,11 +15,14 @@
  */
 #include "opencvdriver.h"
 
-OpenCVDriver::OpenCVDriver(const CameraConfig& config): capture(config.path, cv::CAP_ANY, {cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY}), name(config.path) {
+#include <opencv2/imgproc.hpp>
+
+OpenCVDriver::OpenCVDriver(const CameraConfig& config): capture(config.path, cv::CAP_ANY, {cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY}), name(config.path), cropLeftHalf(config.cropLeftHalf), outputWidth(config.outputWidth), outputHeight(config.outputHeight) {
 	std::replace(name.begin(), name.end(), '/', '_');
 
-	// Use compressed data stream to unlock the highest resolution - framerate combination on USB2 cameras
-	capture.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+	if(config.fourcc.size() == 4) {
+		capture.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc(config.fourcc[0], config.fourcc[1], config.fourcc[2], config.fourcc[3]));
+	}
 
 	if(config.autoResolution()) {
 		capture.set(cv::CAP_PROP_FRAME_WIDTH, INT_MAX);
@@ -27,6 +30,10 @@ OpenCVDriver::OpenCVDriver(const CameraConfig& config): capture(config.path, cv:
 	} else {
 		capture.set(cv::CAP_PROP_FRAME_WIDTH, config.width);
 		capture.set(cv::CAP_PROP_FRAME_HEIGHT, config.height);
+	}
+
+	if(config.fps > 0.0) {
+		capture.set(cv::CAP_PROP_FPS, config.fps);
 	}
 
 	if(config.autoExposure()) {
@@ -54,8 +61,29 @@ OpenCVDriver::OpenCVDriver(const CameraConfig& config): capture(config.path, cv:
 }
 
 std::shared_ptr<RawImage> OpenCVDriver::readImage() {
+	const int captureWidth = (int)capture.get(cv::CAP_PROP_FRAME_WIDTH);
+	const int captureHeight = (int)capture.get(cv::CAP_PROP_FRAME_HEIGHT);
+	const int croppedWidth = cropLeftHalf ? captureWidth / 2 : captureWidth;
+	const int finalWidth = outputWidth > 0 ? outputWidth : croppedWidth;
+	const int finalHeight = outputHeight > 0 ? outputHeight : captureHeight;
+
 	if(image == nullptr || !image.unique())
-		image = std::make_shared<RawImage>(&PixelFormat::BGR8, capture.get(cv::CAP_PROP_FRAME_WIDTH), capture.get(cv::CAP_PROP_FRAME_HEIGHT), name);
+		image = std::make_shared<RawImage>(&PixelFormat::BGR8, finalWidth, finalHeight, name);
+
+	if(cropLeftHalf || finalWidth != captureWidth || finalHeight != captureHeight) {
+		cv::Mat full(cv::Size(captureWidth, captureHeight), CV_8UC3);
+		if(!capture.read(full))
+			return nullptr;
+
+		CLMap<uint8_t> map = image->write<uint8_t>();
+		cv::Mat output(cv::Size(image->width, image->height), CV_8UC3, (void*)*map);
+		cv::Mat cropped = full(cv::Rect(0, 0, croppedWidth, captureHeight));
+		if(cropped.cols == output.cols && cropped.rows == output.rows)
+			cropped.copyTo(output);
+		else
+			cv::resize(cropped, output, output.size(), 0.0, 0.0, cv::INTER_AREA);
+		return image;
+	}
 
 	CLMap<uint8_t> map = image->write<uint8_t>();
 	cv::Mat mat(cv::Size(image->width, image->height), CV_8UC3, (void*)*map);

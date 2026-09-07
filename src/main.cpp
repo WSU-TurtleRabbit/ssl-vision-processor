@@ -15,10 +15,10 @@
  */
 #include <csignal>
 #include "log.h"
-#include <opencv2/bgsegm.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include "CameraModel.h"
+#include "detectioncorrector.h"
 #include "proto/ssl_vision_geometry.pb.h"
 #include "proto/ssl_vision_wrapper.pb.h"
 #include "Resources.h"
@@ -78,7 +78,7 @@ void generateAngleSortedBotHypotheses(const Resources& r, std::list<std::unique_
 	}
 }
 
-void generateRadiusSearchTrackedBotHypotheses(const Resources& r, std::list<std::unique_ptr<BotHypothesis>>& bots, std::vector<Match>& matches, KDTree& blobs, const double currentTimestamp) {
+void generateRadiusSearchTrackedBotHypotheses(const Resources& r, const DetectionCorrector& detectionCorrector, std::list<std::unique_ptr<BotHypothesis>>& bots, std::vector<Match>& matches, KDTree& blobs, const double currentTimestamp) {
 	std::vector<Match*> botBlobs[5];
 	for (const auto& camTracked : r.socket->getTrackedObjects()) {
 		for (const auto& tracked : camTracked.second) {
@@ -86,12 +86,26 @@ void generateRadiusSearchTrackedBotHypotheses(const Resources& r, std::list<std:
 				continue;
 
 			auto timeDelta = (float)(currentTimestamp - tracked.timestamp);
-			Eigen::Vector2f reprojectedPosition = r.perspective->model.image2field(r.perspective->model.field2image({tracked.x, tracked.y, tracked.z}), r.gcSocket->maxBotHeight).head<2>();
-			Eigen::Vector3f trackedPosition = Eigen::Vector3f(reprojectedPosition.x(), reprojectedPosition.y(), tracked.w) + Eigen::Vector3f(tracked.vx, tracked.vy, tracked.vw) * timeDelta;
-			Eigen::Rotation2Df rotation(trackedPosition.z());
-
 			//prevent runtime escalation due to excessive timeDelta when FPS drop below 20 FPS or times are not synced
 			timeDelta = std::max(std::min(timeDelta, 0.05f), 0.0f);
+			const Eigen::Vector2f trackedField(tracked.x + tracked.vx * timeDelta, tracked.y + tracked.vy * timeDelta);
+			const float trackedOrientation = tracked.w + tracked.vw * timeDelta;
+			const Eigen::Vector2f directionField = trackedField + Eigen::Vector2f(std::cos(trackedOrientation), std::sin(trackedOrientation)) * 100.0f;
+			Eigen::Vector2f trackedImage;
+			Eigen::Vector2f directionImage;
+			if(camTracked.first == (unsigned int)r.camId && detectionCorrector.enabled()) {
+				trackedImage = detectionCorrector.fieldToImage(trackedField, tracked.z, *r.perspective);
+				directionImage = detectionCorrector.fieldToImage(directionField, tracked.z, *r.perspective);
+			} else {
+				trackedImage = r.perspective->model.field2image({trackedField.x(), trackedField.y(), tracked.z});
+				directionImage = r.perspective->model.field2image({directionField.x(), directionField.y(), tracked.z});
+			}
+
+			const Eigen::Vector2f reprojectedPosition = r.perspective->model.image2field(trackedImage, r.gcSocket->maxBotHeight).head<2>();
+			const Eigen::Vector2f reprojectedDirection = r.perspective->model.image2field(directionImage, r.gcSocket->maxBotHeight).head<2>();
+			const Eigen::Vector2f directionDelta = reprojectedDirection - reprojectedPosition;
+			Eigen::Vector3f trackedPosition(reprojectedPosition.x(), reprojectedPosition.y(), std::atan2(directionDelta.y(), directionDelta.x()));
+			Eigen::Rotation2Df rotation(trackedPosition.z());
 			//Double acceleration due to velocity determination from two frame difference
 			float blobSearchRadius = (float)r.maxBotAcceleration * timeDelta * timeDelta + (float)r.minTrackingRadius;
 
@@ -240,6 +254,83 @@ void generateNonclippingBallHypotheses(const Resources& r, const std::list<std::
 	}
 }
 
+class BallOcclusionTracker {
+public:
+	void update(const Resources& r, const DetectionCorrector& corrector, SSL_DetectionFrame* detection, const double timestamp) {
+		const SSL_DetectionBall* observed = nullptr;
+		for(const SSL_DetectionBall& ball : detection->balls()) {
+			if(observed == nullptr || ball.confidence() > observed->confidence())
+				observed = &ball;
+		}
+
+		if(observed != nullptr) {
+			const Eigen::Vector2f position(observed->x(), observed->y());
+			const double delta = timestamp - lastSeen;
+			if(hasLast && delta > 0.0 && delta < 0.25) {
+				Eigen::Vector2f measuredVelocity = (position - lastPosition) / (float)delta;
+				if(measuredVelocity.allFinite() && measuredVelocity.norm() <= 6500.0f)
+					velocity = velocity * 0.5f + measuredVelocity * 0.5f;
+				else
+					velocity.setZero();
+			}
+			lastPosition = position;
+			lastSeen = timestamp;
+			lastConfidence = observed->confidence();
+			hasLast = true;
+			holding = false;
+			return;
+		}
+
+		if(!hasLast || r.ballOcclusionHoldTime <= 0.0)
+			return;
+		const double elapsed = timestamp - lastSeen;
+		if(elapsed <= 0.0 || elapsed > r.ballOcclusionHoldTime) {
+			holding = false;
+			return;
+		}
+
+		const Eigen::Vector2f predicted = lastPosition + velocity * (float)elapsed;
+		bool nearRobot = false;
+		auto checkRobots = [&predicted, &nearRobot, &r](const google::protobuf::RepeatedPtrField<SSL_DetectionRobot>& robots) {
+			for(const SSL_DetectionRobot& robot : robots) {
+				if((predicted - Eigen::Vector2f(robot.x(), robot.y())).norm() <= r.ballOcclusionRobotDistance) {
+					nearRobot = true;
+					return;
+				}
+			}
+		};
+		checkRobots(detection->robots_blue());
+		checkRobots(detection->robots_yellow());
+		if(!nearRobot) {
+			holding = false;
+			return;
+		}
+
+		const float remaining = 1.0f - (float)(elapsed / r.ballOcclusionHoldTime);
+		SSL_DetectionBall* held = detection->add_balls();
+		held->set_confidence(std::max(0.05f, lastConfidence * remaining * 0.75f));
+		held->set_x(predicted.x());
+		held->set_y(predicted.y());
+		const float ballHeight = r.perspective->field.has_ball_radius() ? r.perspective->field.ball_radius() : 21.5f;
+		const Eigen::Vector2f pixel = corrector.fieldToImage(predicted, ballHeight, *r.perspective);
+		if(pixel.allFinite()) {
+			held->set_pixel_x(pixel.x());
+			held->set_pixel_y(pixel.y());
+		}
+		if(!holding)
+			LOG("Holding ball through short robot occlusion");
+		holding = true;
+	}
+
+private:
+	bool hasLast = false;
+	bool holding = false;
+	double lastSeen = 0.0;
+	float lastConfidence = 0.0f;
+	Eigen::Vector2f lastPosition = Eigen::Vector2f::Zero();
+	Eigen::Vector2f velocity = Eigen::Vector2f::Zero();
+};
+
 
 #define BENCHMARK false
 
@@ -250,6 +341,8 @@ void sig_stop(int sig_num) {
 
 int main(int argc, char* argv[]) {
 	Resources r(argc > 1 ? argv[1] : "config.yml");
+	DetectionCorrector detectionCorrector(r.lineCorners, (float)r.cameraHeight);
+	BallOcclusionTracker ballOcclusionTracker;
 	cl::Kernel blobList = r.openCl->compile(kernel_blobList_cl);
 
 	uint32_t frameId = 0;
@@ -271,6 +364,7 @@ int main(int argc, char* argv[]) {
 
 		r.socket->geometryCheck();
 		r.perspective->geometryCheck(img->width, img->height, r.gcSocket->maxBotHeight, r.resamplingFactor);
+		detectionCorrector.update(*r.perspective);
 		std::shared_ptr<CLImage> channels[4];
 		r.raw2quad(*img, channels);
 
@@ -324,7 +418,7 @@ int main(int argc, char* argv[]) {
 				for(unsigned int i = 1; i < matches.size(); i++)
 					blobs.insert(&matches[i]);
 
-				generateRadiusSearchTrackedBotHypotheses(r, botHypotheses, matches, blobs, startTime);
+				generateRadiusSearchTrackedBotHypotheses(r, detectionCorrector, botHypotheses, matches, blobs, startTime);
 				generateAngleSortedBotHypotheses(r, botHypotheses, matches, blobs);
 				filterHypothesesScore(botHypotheses, r.minConfidence);
 				filterClippingBotBotHypotheses(r, botHypotheses);
@@ -354,6 +448,9 @@ int main(int argc, char* argv[]) {
 				bot->addToDetectionFrame(r, detection);
 			for (const auto& ball : ballHypotheses)
 				ball->addToDetectionFrame(r, detection);
+
+			detectionCorrector.correct(detection, *r.perspective);
+			ballOcclusionTracker.update(r, detectionCorrector, detection, startTime);
 
 			for (const float& offset : r.socket->getReceivedOffsets())
 				detection->add_t_offsets(offset);

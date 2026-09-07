@@ -21,8 +21,8 @@
 
 
 const PixelFormat PixelFormat::RGBA8 = PixelFormat(4, 1, true, CV_8UC4, {CL_RGBA, CL_UNSIGNED_INT8});
-const PixelFormat PixelFormat::U8 = PixelFormat(1, 1, false, CV_8UC1, {CL_R, CL_UNSIGNED_INT8});
-const PixelFormat PixelFormat::F32 = PixelFormat(4, 1, false, CV_32FC1, {CL_R, CL_FLOAT});
+const PixelFormat PixelFormat::U8 = PixelFormat(1, 1, false, CV_8UC1, {CL_RGBA, CL_UNSIGNED_INT8});
+const PixelFormat PixelFormat::F32 = PixelFormat(4, 1, false, CV_32FC1, {CL_RGBA, CL_FLOAT});
 const PixelFormat PixelFormat::NV12 = PixelFormat(1, 2, true, CV_8UC1, {CL_R, CL_UNSIGNED_INT8}); //Do not use as OpenCL image format or with OpenCV, intended for usage with RTPStreamer (TODO overallocated, actual necessary size is just 3/2)
 
 const PixelFormat PixelFormat::RGGB8 = PixelFormat(2, 2, true, CV_8UC1, {CL_R, CL_UNSIGNED_INT8}, "-DRGGB");
@@ -147,7 +147,7 @@ CLArray::CLArray(void* data, const int size): buffer(clAlloc((cl_mem_flags) CL_M
 
 static inline cl::Image2D allocImage(int width, int height, const PixelFormat* format) {
 	int error;
-	cl::Image2D image = cl::Image2D(cl::Context::getDefault(), CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, format->clFormat, width, height, 0, nullptr, &error);
+	cl::Image2D image = cl::Image2D(cl::Context::getDefault(), CL_MEM_READ_WRITE, format->clFormat, width, height, 0, nullptr, &error);
 	if(error != CL_SUCCESS) {
 		FATAL("Image creation error: " << error << " " << width << "," << height << " " << (format == &PixelFormat::RGBA8));
 	}

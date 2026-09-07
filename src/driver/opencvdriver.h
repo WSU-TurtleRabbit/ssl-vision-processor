@@ -35,4 +35,7 @@ private:
 	cv::VideoCapture capture;
 	std::shared_ptr<RawImage> image = nullptr;
 	std::string name;
+	bool cropLeftHalf = false;
+	int outputWidth = 0;
+	int outputHeight = 0;
 };

@@ -43,9 +43,14 @@ CameraConfig::CameraConfig(const YAML::Node &cam) {
 
 	width = cam["width"].as<int>(0);
 	height = cam["height"].as<int>(0);
+	outputWidth = cam["output_width"].as<int>(0);
+	outputHeight = cam["output_height"].as<int>(0);
+	fps = cam["fps"].as<double>(0.0);
 	exposure = cam["exposure"].as<double>(0.0);
 	gain = cam["gain"].as<double>(0.0);
 	gamma = cam["gamma"].as<double>(1.0);
+	fourcc = cam["fourcc"].as<std::string>("");
+	cropLeftHalf = cam["crop_left_half"].as<bool>(false);
 
 	const YAML::Node wb = cam["white_balance"].IsDefined() ? cam["white_balance"] : YAML::Node();
 	if(wb.IsMap()) {

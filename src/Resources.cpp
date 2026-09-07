@@ -197,6 +197,8 @@ void Resources::applyTunables(const YAML::Node& config) {
 	YAML::Node tracking = getOptional(config["tracking"]);
 	minTrackingRadius = tracking["min_tracking_radius"].as<double>(20.0);
 	maxBotAcceleration = 1000 * tracking["max_bot_acceleration"].as<double>(6.5);
+	ballOcclusionHoldTime = tracking["ball_occlusion_hold_ms"].as<double>(200.0) / 1000.0;
+	ballOcclusionRobotDistance = tracking["ball_occlusion_robot_distance"].as<double>(180.0);
 
 	YAML::Node color = getOptional(config["color"]);
 	referenceForce = color["reference_force"].as<float>(0.1f);

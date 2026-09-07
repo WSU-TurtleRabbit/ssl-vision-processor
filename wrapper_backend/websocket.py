@@ -37,10 +37,15 @@ def _encode_wrapper_packet(payload: bytes) -> dict[str, Any]:
     return MessageToDict(packet, preserving_proto_field_name=True)
 
 
+def _encode_proto_message(payload: Any) -> dict[str, Any]:
+    return MessageToDict(payload, preserving_proto_field_name=True)
+
+
 # Encoders convert the raw bus payload for a topic into a JSON-serialisable
 # dict. Topics not present here cannot be exposed to clients.
 _TOPIC_ENCODERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "wrapper_packet.out": _encode_wrapper_packet,
+    "detection.in": _encode_proto_message,
 }
 
 

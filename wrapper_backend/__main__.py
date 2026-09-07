@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable
 
 from aiohttp import web
 
-from wrapper_backend import snapshot, websocket
+from wrapper_backend import operator, snapshot, websocket
 from wrapper_backend.bus import Bus
 from wrapper_backend.geometry import Geometry
 from wrapper_backend.multicast import Multicast
@@ -43,6 +43,10 @@ async def _main() -> None:
     parser.add_argument("--vision-port", type=int, default=10006)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--vision-config", type=Path, default=Path("config.yml"))
+    parser.add_argument(
+        "--frontend-dir", type=Path, default=Path("wrapper-frontend/dist")
+    )
     args = parser.parse_args()
 
     bus = Bus()
@@ -51,7 +55,15 @@ async def _main() -> None:
 
     http_app = web.Application(middlewares=[_cors_middleware])
     websocket.register(http_app, bus)
-    snapshot.register(http_app, Path("img"))
+    img_dir = args.vision_config.parent / "img"
+    snapshot.register(http_app, img_dir)
+    operator.register(
+        http_app,
+        args.vision_config,
+        args.geometry,
+        args.frontend_dir,
+        img_dir,
+    )
 
     http_runner = web.AppRunner(http_app)
     await http_runner.setup()

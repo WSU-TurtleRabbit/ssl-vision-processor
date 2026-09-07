@@ -1,0 +1,102 @@
+# Competition-style TIGERs VisionProcessor config for the local lab field.
+cam_id: 0
+bot_heights_file: robot-heights.yml
+
+camera:
+  driver: OPENCV
+  path: /dev/video0
+  width: 2560
+  height: 720
+  output_width: 768
+  output_height: 432
+  # This Jetson processes the calibrated 768x432 frame in about 31-45 ms.
+  # Capture at 25 FPS so frames do not queue behind the detector.
+  fps: 25
+  fourcc: YUYV
+  crop_left_half: true
+  exposure: 0.0
+  gain: 1.0
+  gamma: 1.0
+  white_balance: OUTDOOR
+
+geometry:
+  camera_amount: 1
+  camera_height: 2000.0
+  # Centers of the tape X markers: the absolute outside boundary edge.
+  outer_line_corners:
+    - [53.000, 370.000]
+    - [58.000, 59.000]
+    - [638.000, 50.000]
+    - [639.000, 367.000]
+  # Detected inner white-line corners in the 768x432 calibrated frame.
+  line_corners:
+    - [87.170, 339.600]
+    - [92.480, 81.800]
+    - [604.250, 76.790]
+    - [605.320, 338.990]
+  refinement: false
+  field_line_threshold: 35
+  min_line_segment_length: 80.0
+  max_line_segment_offset: 10.0
+  max_line_segment_angle: 3.0
+
+thresholds:
+  # Preserve fast-motion marker edges that are softened by the 25 FPS camera.
+  # Robot hypotheses remain gated by the five-point geometry, calibrated
+  # colors, identity pattern, and confidence checks below.
+  circularity: 10.0
+  score: 4.0
+  blobs: 2000
+  # High-speed marker blur occasionally drops otherwise coherent Robot 4
+  # hypotheses below 0.15 for five frames.  Phoenix still requires three
+  # consistent observations before establishing a track and independently
+  # gates identity, heading, field position, and command freshness.
+  min_confidence: 0.10
+  min_cam_edge_distance: 120.0
+  clipping_tolerance: 10.0
+  geometry_tolerance: 10.0
+
+color:
+  # Fixed field lighting: keep calibrated references from drifting on partial detections.
+  reference_force: 0.0
+  history_force: 1.0
+  orange: [255, 120, 40]
+  field: [42, 130, 67]
+  yellow: [255, 220, 0]
+  blue: [45, 190, 255]
+  green: [70, 230, 190]
+  pink: [235, 90, 165]
+
+tracking:
+  # At 25 FPS the filtered tracker velocity can lag the estimator by about
+  # 1 m/s during fast diagonals.  A 35 mm base radius keeps the five known
+  # marker searches locked through that transient; identity/color and pattern
+  # geometry checks still gate every accepted Robot 4 hypothesis.
+  min_tracking_radius: 35.0
+  max_bot_acceleration: 6.5
+  # Preserve a recently visible ball only through brief robot occlusions.
+  ball_occlusion_hold_ms: 200
+  ball_occlusion_robot_distance: 300.0
+
+network:
+  gc_ip: "224.5.23.1"
+  gc_port: 10003
+  vision_ip: "224.5.23.2"
+  vision_port: 10006
+
+stream:
+  # The operator UI uses debug snapshots; software H.264 encoding steals CPU
+  # from detection on this Jetson and is not needed for SSL-Vision packets.
+  active: false
+  raw_feed: false
+  ip_base_prefix: 224.5.23.
+  ip_base_end: 100
+  port: 10100
+
+debug:
+  wait_for_geometry: true
+  debug_images: true
+  # Periodically converting and writing four full debug images introduced
+  # ~187 ms vision gaps during high-speed motion.  The last commissioning
+  # snapshots are retained in img/; disable periodic writes for live play.
+  debug_stream_interval_ms: 100

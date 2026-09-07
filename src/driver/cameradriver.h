@@ -64,9 +64,14 @@ public:
 
 	int width;
 	int height;
+	int outputWidth;
+	int outputHeight;
+	double fps;
 	double exposure;
 	double gain;
 	double gamma;
+	std::string fourcc;
+	bool cropLeftHalf;
 
 	WhiteBalanceType whiteBalanceType = WhiteBalanceType_Manual;
 	double whiteBalanceBlue;

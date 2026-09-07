@@ -48,6 +48,8 @@ public:
 
 	double minTrackingRadius;
 	double maxBotAcceleration; // mm/s²
+	double ballOcclusionHoldTime;
+	double ballOcclusionRobotDistance;
 
 	double minCircularity;
 	double minScore;

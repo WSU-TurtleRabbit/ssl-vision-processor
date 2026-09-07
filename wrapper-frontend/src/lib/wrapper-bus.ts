@@ -2,7 +2,12 @@ import { readable, type Readable } from "svelte/store";
 
 export type ConnectionState = "connecting" | "open" | "closed";
 
-const DEFAULT_URL = `ws://${location.hostname || "localhost"}:8765/ws`;
+const websocketScheme = location.protocol === "https:" ? "wss" : "ws";
+const websocketHost =
+  location.port === "8765"
+    ? location.host
+    : `${location.hostname || "localhost"}:8765`;
+const DEFAULT_URL = `${websocketScheme}://${websocketHost}/ws`;
 const BACKOFF_INITIAL_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 

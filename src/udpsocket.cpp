@@ -23,6 +23,7 @@
 #include <cstring>
 #include <google/protobuf/util/message_differencer.h>
 #include <mutex>
+#include <unistd.h>
 
 UDPSocket::UDPSocket(const std::string& ip, uint16_t port) {
 	//Adapted from https://gist.github.com/hostilefork/f7cae3dc33e7416f2dd25a402857b6c6
@@ -95,7 +96,7 @@ void UDPSocket::send(const google::protobuf::Message& msg) {
 	std::string str;
 	msg.SerializeToString(&str);
 	if(sendto(socket_, str.data(), str.length(), 0, &addr_, sizeof(addr_)) < 0) {
-		WARN("UDP Frame send failed: " << strerror(errno) << " " << strerrorname_np(errno));
+		WARN("UDP Frame send failed: " << strerror(errno));
 	}
 }
 
@@ -108,7 +109,7 @@ void UDPSocket::run() {
 			return;
 
 		if (bytesRead < 0) {
-			WARN("UDP Frame recv failed: " << strerror(errno) << " " << strerrorname_np(errno));
+			WARN("UDP Frame recv failed: " << strerror(errno));
 			return;
 		}
 

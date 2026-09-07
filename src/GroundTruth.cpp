@@ -67,11 +67,11 @@ namespace YAML {
 				detection.set_t_capture_camera(node["t_capture_camera"].as<double>());
 
 			for (const auto &item : node["balls"])
-				detection.mutable_balls()->Add(item.as<SSL_DetectionBall>());
+				detection.add_balls()->CopyFrom(item.as<SSL_DetectionBall>());
 			for (const auto &item : node["robots_blue"])
-				detection.mutable_robots_blue()->Add(item.as<SSL_DetectionRobot>());
+				detection.add_robots_blue()->CopyFrom(item.as<SSL_DetectionRobot>());
 			for (const auto &item : node["robots_yellow"])
-				detection.mutable_robots_yellow()->Add(item.as<SSL_DetectionRobot>());
+				detection.add_robots_yellow()->CopyFrom(item.as<SSL_DetectionRobot>());
 
 			return true;
 		}

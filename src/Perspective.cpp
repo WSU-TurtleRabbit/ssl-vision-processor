@@ -113,7 +113,7 @@ void Perspective::geometryCheck(const int width, const int height, const double 
 	visibleFieldExtent[3] = std::min(visibleFieldExtent[3], halfWidth);
 
 	Eigen::Vector2f fieldSize = Eigen::Vector2f(visibleFieldExtent[1] - visibleFieldExtent[0], visibleFieldExtent[3] - visibleFieldExtent[2]);
-	reprojectedFieldSize = (fieldSize / fieldScale).array().rint().cast<int>();
+	reprojectedFieldSize = (fieldSize / fieldScale).unaryExpr([](float v) { return std::rint(v); }).cast<int>();
 
 	//Make size even for rtpstreamer
 	if(reprojectedFieldSize[0] % 2)
