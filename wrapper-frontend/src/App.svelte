@@ -171,6 +171,11 @@
   // so keep the newest frame from each rather than one shared slot. The
   // combined view is the union; a single-camera view reads one entry.
   let framesByCamera = $state<Record<number, DetectionFrame>>({});
+  // When each camera's frame arrived, by our clock. t_sent is stamped on the
+  // sending machine, so comparing it to Date.now() silently misbehaves the
+  // moment the detector runs anywhere else - which is the whole point of the
+  // multi-camera setup. Robots already age off a local stamp; balls now do too.
+  let frameArrivedAt = $state<Record<number, number>>({});
   let tracked = $state<Record<string, TrackedRobot>>({});
   let lastUpdate = $state<number | null>(null);
 
@@ -181,18 +186,55 @@
   let colorConfig = $derived(asRecord(activeConfig["color"]));
   let networkConfig = $derived(asRecord(activeConfig["network"]));
   let streamConfig = $derived(asRecord(activeConfig["stream"]));
-  // Live geometry wins when present - it is the merged state the wrapper is
-  // actually broadcasting, and only it carries the drawable lines and arcs.
-  // The yaml underneath keeps the dimensions readable before the first
-  // packet arrives.
+  // The panel and the drawing want different things, so keep them apart.
+  //
+  // fieldFile is the geometry yaml as written: what this setup is configured
+  // to be. That is what the Field geometry panel reports, so the numbers on
+  // screen always match the file an operator can open and edit.
+  //
+  // fieldDrawn is the wrapper's broadcast geometry, which is the only source
+  // of the generated lines and arcs, and so the only thing that can be drawn.
+  // It falls back to the file for dimensions before the first packet lands.
   let fieldFile = $derived(asRecord(geometryFile?.geometry["field"]));
-  let field = $derived<FieldData>({ ...fieldFile, ...(geometry?.field ?? {}) });
+  let fieldDrawn = $derived<FieldData>({ ...fieldFile, ...(geometry?.field ?? {}) });
 
   let cameraSource = $derived(cameras ?? camerasHttp);
-  let cameraList = $derived(cameraSource?.cameras ?? []);
-  let combined = $derived(
-    cameraSource?.combined ?? { count: 0, online: 0, fps: 0, latency_ms: 0 },
-  );
+
+  // A camera that has sent a detection exists, full stop. The roster is only
+  // published once a second and carries the extras (name, address, measured
+  // rate), so seed the list from the frames themselves and let the roster
+  // fill in detail as it arrives - otherwise a camera that just came up is
+  // missing from the table for up to a second while its data is on screen.
+  let cameraList = $derived.by<CameraStatus[]>(() => {
+    const roster = cameraSource?.cameras ?? [];
+    const known = roster.map((camera) => camera.camera_id);
+    const seeded: CameraStatus[] = [];
+    for (const [key, frame] of Object.entries(framesByCamera)) {
+      const id = Number(key);
+      if (known.includes(id)) continue;
+      seeded.push({
+        camera_id: id,
+        address: "--",
+        name: `camera ${String(id)}`,
+        online: true,
+        fps: 0,
+        latency_ms: ((frame.t_sent ?? 0) - (frame.t_capture ?? 0)) * 1000,
+        frame_number: frame.frame_number ?? 0,
+        age_s: 0,
+      });
+    }
+    return [...roster, ...seeded].sort((a, b) => a.camera_id - b.camera_id);
+  });
+  let combined = $derived.by(() => {
+    const roster = cameraSource?.combined;
+    const online = cameraList.filter((camera) => camera.online).length;
+    return {
+      count: cameraList.length,
+      online,
+      fps: roster?.fps ?? 0,
+      latency_ms: roster?.latency_ms ?? 0,
+    };
+  });
 
   // Calibration is published per camera; match it to the selection rather
   // than always reading calib[0], which is only correct for one camera.
@@ -235,7 +277,7 @@
     for (const [camId, frame] of Object.entries(framesByCamera)) {
       const id = Number(camId);
       if (selectedCameraId !== null && id !== selectedCameraId) continue;
-      if (now - (frame.t_sent ?? 0) * 1000 > DROP_MS) continue;
+      if (now - (frameArrivedAt[id] ?? 0) > DROP_MS) continue;
       for (const ball of frame.balls ?? []) out.push({ ...ball, camera: id });
     }
     return out;
@@ -258,8 +300,10 @@
   $effect(() => {
     const frame = $detectionPacket;
     if (frame?.camera_id === undefined) return;
+    const stamp = Date.now();
     framesByCamera = { ...framesByCamera, [frame.camera_id]: frame };
-    lastUpdate = Date.now();
+    frameArrivedAt = { ...frameArrivedAt, [frame.camera_id]: stamp };
+    lastUpdate = stamp;
     absorbRobots(frame);
   });
 
@@ -277,6 +321,18 @@
   $effect(() => {
     void [fieldCanvas, geometry, visibleRobots, balls, isCombined];
     drawField();
+  });
+
+  // Views are per camera and not every camera writes every view, so a stale
+  // selection would leave the stage blank after switching. Fall back to the
+  // first view this camera actually has.
+  $effect(() => {
+    if (isCombined) return;
+    const available = cameraSnapshots();
+    if (available.length === 0) return;
+    if (!available.some((snapshot) => snapshot.view === selectedView)) {
+      selectedView = available[0]?.view ?? "raw";
+    }
   });
 
   function absorbRobots(frame: DetectionFrame): void {
@@ -412,8 +468,8 @@
     context.fillStyle = carpet;
     context.fillRect(0, 0, width, height);
 
-    const length = Number(field["field_length"] ?? 0);
-    const fieldWidth = Number(field["field_width"] ?? 0);
+    const length = Number(fieldDrawn["field_length"] ?? 0);
+    const fieldWidth = Number(fieldDrawn["field_width"] ?? 0);
     if (!length || !fieldWidth) {
       context.fillStyle = styles.getPropertyValue("--text-muted").trim() || "#7d9188";
       context.font = "13px Inter, system-ui, sans-serif";
@@ -422,7 +478,7 @@
       return;
     }
 
-    const boundary = Number(field["boundary_width"] ?? 0);
+    const boundary = Number(fieldDrawn["boundary_width"] ?? 0);
     const totalLength = length + boundary * 2;
     const totalWidth = fieldWidth + boundary * 2;
     const scale = Math.min(width / totalLength, height / totalWidth) * 0.97;
@@ -440,17 +496,17 @@
     );
 
     context.strokeStyle = paint;
-    context.lineWidth = Math.max(1, Number(field["line_thickness"] ?? 10) * scale);
+    context.lineWidth = Math.max(1, Number(fieldDrawn["line_thickness"] ?? 10) * scale);
     context.lineCap = "round";
 
-    for (const line of field.field_lines ?? []) {
+    for (const line of fieldDrawn.field_lines ?? []) {
       context.beginPath();
       context.moveTo(toX(line.p1?.x ?? 0), toY(line.p1?.y ?? 0));
       context.lineTo(toX(line.p2?.x ?? 0), toY(line.p2?.y ?? 0));
       context.stroke();
     }
 
-    for (const arc of field.field_arcs ?? []) {
+    for (const arc of fieldDrawn.field_arcs ?? []) {
       context.beginPath();
       context.arc(
         toX(arc.center?.x ?? 0),
@@ -463,8 +519,8 @@
     }
 
     // Goals, which the geometry describes by size rather than as lines.
-    const goalWidth = Number(field["goal_width"] ?? 0);
-    const goalDepth = Number(field["goal_depth"] ?? 0);
+    const goalWidth = Number(fieldDrawn["goal_width"] ?? 0);
+    const goalDepth = Number(fieldDrawn["goal_depth"] ?? 0);
     if (goalWidth && goalDepth) {
       context.strokeStyle = styles.getPropertyValue("--goal").trim() || "#40cfff";
       context.lineWidth = Math.max(1.5, 20 * scale);
@@ -479,7 +535,7 @@
       }
     }
 
-    const robotRadius = Number(field["max_robot_radius"] ?? 90);
+    const robotRadius = Number(fieldDrawn["max_robot_radius"] ?? 90);
     // An SSL robot is a cylinder with the front flattened for the dribbler,
     // so draw the same shape rather than a plain disc: the flat edge shows
     // heading without needing a separate marker.
@@ -521,7 +577,7 @@
       context.globalAlpha = 1;
     }
 
-    const ballRadius = Number(field["ball_radius"] ?? 21.5);
+    const ballRadius = Number(fieldDrawn["ball_radius"] ?? 21.5);
     for (const ball of balls) {
       // A real ball is 21.5 mm, only a few pixels at field scale, so enforce a
       // floor: it has to stay findable on a full-field view.
@@ -812,15 +868,15 @@
       <section class="panel">
         <div class="section-heading compact"><h2>Field geometry</h2></div>
         <dl class="property-grid">
-          <div><dt>Length</dt><dd>{number(field["field_length"])} mm</dd></div>
-          <div><dt>Width</dt><dd>{number(field["field_width"])} mm</dd></div>
-          <div><dt>Center circle</dt><dd>{number(field["center_circle_radius"])} mm</dd></div>
-          <div><dt>Penalty area</dt><dd>{number(field["penalty_area_depth"])} x {number(field["penalty_area_width"])}</dd></div>
-          <div><dt>Goal</dt><dd>{number(field["goal_width"])} x {number(field["goal_depth"])} mm</dd></div>
-          <div><dt>Boundary</dt><dd>{number(field["boundary_width"])} mm</dd></div>
-          <div><dt>Line thickness</dt><dd>{number(field["line_thickness"])} mm</dd></div>
-          <div><dt>Robot radius</dt><dd>{number(field["max_robot_radius"], 0)} mm</dd></div>
-          <div><dt>Ball radius</dt><dd>{number(field["ball_radius"], 1)} mm</dd></div>
+          <div><dt>Length</dt><dd>{number(fieldFile["field_length"])} mm</dd></div>
+          <div><dt>Width</dt><dd>{number(fieldFile["field_width"])} mm</dd></div>
+          <div><dt>Center circle</dt><dd>{number(fieldFile["center_circle_radius"])} mm</dd></div>
+          <div><dt>Penalty area</dt><dd>{number(fieldFile["penalty_area_depth"])} x {number(fieldFile["penalty_area_width"])}</dd></div>
+          <div><dt>Goal</dt><dd>{number(fieldFile["goal_width"])} x {number(fieldFile["goal_depth"])} mm</dd></div>
+          <div><dt>Boundary</dt><dd>{number(fieldFile["boundary_width"])} mm</dd></div>
+          <div><dt>Line thickness</dt><dd>{number(fieldFile["line_thickness"])} mm</dd></div>
+          <div><dt>Robot radius</dt><dd>{number(fieldFile["max_robot_radius"], 0)} mm</dd></div>
+          <div><dt>Ball radius</dt><dd>{number(fieldFile["ball_radius"], 1)} mm</dd></div>
           <div><dt>Robot height</dt><dd>{robotHeightText()}</dd></div>
         </dl>
       </section>
