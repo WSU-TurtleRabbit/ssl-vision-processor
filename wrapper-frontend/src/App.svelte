@@ -1067,6 +1067,23 @@
    * cached, and the surrounding panels update with it instead of lagging by a
    * poll interval.
    */
+  /** Show a diagnostic view, switching off the combined field to do it.
+   *
+   * The views belong to a single processor, so they need a camera selected.
+   * Making the buttons inert until one is picked reads as broken - the
+   * obvious thing to do with a view button is click it - so clicking one
+   * selects the first available camera instead of doing nothing.
+   */
+  function chooseView(view: string): void {
+    if (isCombined) {
+      const first = cameraList[0];
+      if (!first) return;
+      selectedCamera = String(first.camera_id);
+    }
+    selectedView = view;
+    refreshNow();
+  }
+
   function refreshNow(): void {
     cacheBuster = Date.now();
     loadSnapshots();
@@ -1147,6 +1164,9 @@
     <div class="header-status">
       <span class="metric">Last update <strong>{clockText(lastUpdate)}</strong></span>
       <span class="metric">Frame <strong>{number(activeFrame?.frame_number)}</strong></span>
+      <button class="action" title="Refetch everything now" onclick={refreshNow}>
+        Refresh
+      </button>
       <span class:healthy={$connectionState === "open"} class="status-badge">
         <span class="status-dot"></span>
         Bus {$connectionState}
@@ -1180,9 +1200,6 @@
       Processing {processingHealthy ? "healthy" : "degraded"}
     </span>
 
-    <button class="action" title="Refetch everything now" onclick={refreshNow}>
-      Refresh
-    </button>
     <button
       class="action"
       title="Clear cached files and reload the page from the server"
@@ -1226,11 +1243,12 @@
           {#each cameraViews() as view (view)}
             <button
               class:active={!isCombined && view === selectedView}
-              disabled={isCombined}
-              title={isCombined ? "Select a camera to view diagnostics" : viewLabel(view)}
+              disabled={cameraList.length === 0}
+              title={isCombined
+                ? `Show ${viewLabel(view)} for camera ${String(cameraList[0]?.camera_id ?? 0)}`
+                : viewLabel(view)}
               onclick={() => {
-                selectedView = view;
-                refreshNow();
+                chooseView(view);
               }}
             >
               {viewLabel(view)}
