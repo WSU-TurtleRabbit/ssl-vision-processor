@@ -1187,6 +1187,24 @@
       </select>
     </label>
 
+    <label class="camera-picker">
+      <span>View</span>
+      <select
+        value={isCombined ? "" : selectedView}
+        disabled={cameraList.length === 0}
+        onchange={(event) => {
+          chooseView(event.currentTarget.value);
+        }}
+      >
+        {#if isCombined}
+          <option value="">Combined field</option>
+        {/if}
+        {#each cameraViews() as view (view)}
+          <option value={view}>{viewLabel(view)}</option>
+        {/each}
+      </select>
+    </label>
+
     <span class="metric">
       {isCombined ? "Combined latency" : "Latency"}
       <strong>{number(isCombined ? combined.latency_ms : selectedStatus?.latency_ms, 1)} ms</strong>
