@@ -174,7 +174,14 @@
   // visibly stale under an overlay that moves at the detection rate, so pull
   // them several times a second instead.
   const IMAGE_REFRESH_MS = 200;
+  // Two clocks on purpose. drawClock advances every animation frame and is
+  // read only inside the draw functions, so trail fades stay smooth. `now` is
+  // reactive and every derived list depends on it, so it ticks at a human
+  // rate: driving it at display rate recomputed the robot and ball lists 60
+  // times a second to produce the same answer.
+  let drawClock = Date.now();
   let now = $state(Date.now());
+  const REACTIVE_TICK_MS = 100;
   let configPayload = $state<ConfigResponse | null>(null);
   let health = $state<HealthResponse | null>(null);
   let geometry = $state<GeometryData | null>(null);
@@ -185,6 +192,15 @@
   // and both should be readable whenever the backend is up at all.
   let geometryFile = $state<GeometryResponse | null>(null);
   let fieldHttp = $state<GeometryData | null>(null);
+  // Which bundle the server is serving, versus the one this page is running.
+  // A rebuild changes the fingerprinted filename, so a difference means the
+  // page is stale - which is otherwise invisible, since a browser will reuse
+  // a cached index.html happily and nothing on screen says so.
+  let servedBundle = $state<string | null>(null);
+  let runningBundle: string | null = null;
+  let updateAvailable = $derived(
+    servedBundle !== null && runningBundle !== null && servedBundle !== runningBundle,
+  );
   let camerasHttp = $state<CamerasPayload | null>(null);
   let fieldCanvas = $state<HTMLCanvasElement>();
   let overlayCanvas = $state<HTMLCanvasElement>();
@@ -383,38 +399,27 @@
 
   // Re-evaluate ages on a timer so entries grey out and expire even when no
   // new frames arrive - which is exactly the case a dead camera produces.
-  // Ages advance on the display's own clock rather than a timer. Data arrives
-  // at whatever rate the detector manages (~22/s here), but fades, trails and
-  // staleness are time-based and should move smoothly between packets.
+  // One animation loop owns both canvases. Drawing from here rather than from
+  // an effect keeps rendering off Svelte's dependency graph: the draw reads
+  // whatever the current state is when the frame comes round, instead of a
+  // state change scheduling a redraw.
   $effect(() => {
     let frame = 0;
+    let lastReactive = 0;
     const tick = () => {
-      now = Date.now();
+      drawClock = Date.now();
+      if (drawClock - lastReactive >= REACTIVE_TICK_MS) {
+        lastReactive = drawClock;
+        now = drawClock;
+      }
+      drawField();
+      drawFieldOverlay();
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(frame);
     };
-  });
-
-  $effect(() => {
-    void [fieldCanvas, liveGeometry, visibleRobots, balls, isCombined];
-    drawField();
-  });
-
-  $effect(() => {
-    void [
-      overlayCanvas,
-      selectedView,
-      selectedCameraId,
-      liveGeometry,
-      cameraCalibration,
-      visibleRobots,
-      balls,
-      now,
-    ];
-    drawFieldOverlay();
   });
 
   // Views are per camera and not every camera writes every view, so a stale
@@ -701,8 +706,11 @@
       cachedWidth > 0 ? cachedWidth : valueNumber(cameraCalibration["pixel_image_width"], 768);
     const height =
       cachedHeight > 0 ? cachedHeight : valueNumber(cameraCalibration["pixel_image_height"], 432);
-    canvas.width = width;
-    canvas.height = height;
+    // Assigning width or height reallocates the backing store and clears it,
+    // so only do it when the size really changed - otherwise every frame paid
+    // for a full reallocation.
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
     const context = canvas.getContext("2d");
     if (!context) return;
     context.clearRect(0, 0, width, height);
@@ -929,8 +937,10 @@
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
     if (width === 0 || height === 0) return;
-    canvas.width = Math.round(width * ratio);
-    canvas.height = Math.round(height * ratio);
+    const backingWidth = Math.round(width * ratio);
+    const backingHeight = Math.round(height * ratio);
+    if (canvas.width !== backingWidth) canvas.width = backingWidth;
+    if (canvas.height !== backingHeight) canvas.height = backingHeight;
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, width, height);
 
@@ -1074,7 +1084,7 @@
         const from = points[i - 1];
         const to = points[i];
         if (!from || !to) continue;
-        context.globalAlpha = Math.max(0, 0.5 * (1 - (now - to.t) / TRAIL_MS));
+        context.globalAlpha = Math.max(0, 0.5 * (1 - (drawClock - to.t) / TRAIL_MS));
         context.beginPath();
         context.moveTo(toX(from.x), toY(from.y));
         context.lineTo(toX(to.x), toY(to.y));
@@ -1144,6 +1154,16 @@
     }
   }
 
+  /** Skip periodic work while the tab is in the background.
+   *
+   * This page is meant to sit open all day, and a hidden tab was still
+   * pulling six endpoints and a JPEG every second for nobody. Interactions
+   * still fetch: only the timers defer.
+   */
+  function idle(): boolean {
+    return document.hidden;
+  }
+
   function loadSnapshots(): void {
     fetch(api("/snapshots"))
       .then((response) => response.json())
@@ -1176,6 +1196,19 @@
     fetch(api("/api/field"))
       .then((response) => response.json())
       .then((data: GeometryData) => (fieldHttp = data))
+      .catch(() => undefined);
+  }
+
+  function loadVersion(): void {
+    fetch(api("/api/version"), { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data: { bundle: string | null }) => {
+        if (data.bundle === null) return;
+        // The first answer defines what this page is running; later answers
+        // are compared against it.
+        runningBundle ??= data.bundle;
+        servedBundle = data.bundle;
+      })
       .catch(() => undefined);
   }
 
@@ -1238,6 +1271,7 @@
    */
   function pumpFrame(): void {
     if (isCombined || selectedCameraId === null) return;
+    if (document.hidden) return;
     const key = frameKey();
     if (inFlight === key) return;
     inFlight = key;
@@ -1267,6 +1301,7 @@
     loadGeometry();
     loadField();
     loadCameras();
+    loadVersion();
     // Start the first frame now rather than waiting a refresh interval, so a
     // page opened straight onto a camera is not blank for its first moment.
     pumpFrame();
@@ -1302,15 +1337,35 @@
     loadGeometry();
     loadField();
     loadCameras();
-    const snapshotTimer = setInterval(loadSnapshots, 3000);
-    const configTimer = setInterval(loadConfig, 5000);
-    const healthTimer = setInterval(loadHealth, 1000);
-    const geometryTimer = setInterval(loadGeometry, 5000);
-    const camerasTimer = setInterval(loadCameras, 1000);
-    const fieldTimer = setInterval(loadField, 1000);
-    const imageTimer = setInterval(() => {
-      pumpFrame();
-    }, IMAGE_REFRESH_MS);
+    const snapshotTimer = setInterval(() => {
+      if (!idle()) loadSnapshots();
+    }, 3000);
+    const configTimer = setInterval(() => {
+      if (!idle()) loadConfig();
+    }, 5000);
+    const healthTimer = setInterval(() => {
+      if (!idle()) loadHealth();
+    }, 1000);
+    const geometryTimer = setInterval(() => {
+      if (!idle()) loadGeometry();
+    }, 5000);
+    const camerasTimer = setInterval(() => {
+      if (!idle()) loadCameras();
+    }, 1000);
+    const fieldTimer = setInterval(() => {
+      if (!idle()) loadField();
+    }, 1000);
+    const versionTimer = setInterval(() => {
+      if (!idle()) loadVersion();
+    }, 10000);
+    const imageTimer = setInterval(pumpFrame, IMAGE_REFRESH_MS);
+
+    // Coming back to a backgrounded tab should show current data at once,
+    // not whatever was on screen when it was hidden.
+    const onVisibility = () => {
+      if (!document.hidden) refreshNow();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     const resize = () => {
       drawField();
     };
@@ -1323,8 +1378,10 @@
       clearInterval(geometryTimer);
       clearInterval(camerasTimer);
       clearInterval(fieldTimer);
+      clearInterval(versionTimer);
       clearInterval(imageTimer);
       window.removeEventListener("resize", resize);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   });
 </script>
@@ -1334,6 +1391,22 @@
 </svelte:head>
 
 <main>
+  {#if updateAvailable}
+    <div class="update-bar" role="status">
+      <span
+        >A newer build is on the server. This page is still running the
+        previous one.</span
+      >
+      <button
+        onclick={() => {
+          void hardReload();
+        }}
+      >
+        Load it
+      </button>
+    </div>
+  {/if}
+
   <header class="topbar">
     <div class="identity">
       <span class="product-mark">VP</span>
@@ -1748,6 +1821,36 @@
 
   main {
     min-height: 100vh;
+  }
+
+  /* Sits above everything, because it explains why anything below it might
+     be wrong. Only ever appears when the server genuinely has a newer build. */
+  .update-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 18px;
+    color: #0d1a12;
+    background: var(--accent);
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+
+  .update-bar button {
+    margin-left: auto;
+    height: 26px;
+    padding: 0 12px;
+    border-radius: 4px;
+    border: 1px solid rgba(13, 26, 18, 0.45);
+    background: rgba(13, 26, 18, 0.12);
+    color: #0d1a12;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .update-bar button:hover {
+    background: rgba(13, 26, 18, 0.22);
   }
 
   .topbar {

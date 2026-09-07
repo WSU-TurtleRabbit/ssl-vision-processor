@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,25 @@ def register(
             }
         )
 
+    async def version_handler(_: web.Request) -> web.Response:
+        """Identify the build currently on disk.
+
+        Vite fingerprints the bundle filename, so the name index.html points at
+        IS the build identity. A page can compare it against the bundle it is
+        running and notice a rebuild, instead of someone having to know to
+        force-reload.
+        """
+        index = frontend_dir / "index.html"
+        try:
+            markup = index.read_text(encoding="utf-8")
+        except OSError as exc:
+            return web.json_response({"error": str(exc)}, status=503)
+
+        match = re.search(r'assets/([^"\']+\.js)', markup)
+        response = web.json_response({"bundle": match.group(1) if match else None})
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     async def health_handler(_: web.Request) -> web.Response:
         images = [
             path
@@ -114,6 +134,7 @@ def register(
         return response
 
     http_app.router.add_get("/api/config", config_handler)
+    http_app.router.add_get("/api/version", version_handler)
     http_app.router.add_get("/api/geometry", geometry_handler)
     http_app.router.add_get("/api/health", health_handler)
     http_app.router.add_get("/", index_handler)
