@@ -37,3 +37,4 @@ CMakeCache.txt
 /build*
 /.zed
 validation-baseline/
+logs/

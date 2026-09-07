@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from aiohttp import web
 
 from wrapper_backend import operator, snapshot, websocket
+from wrapper_backend.cameras import Cameras
 from wrapper_backend.bus import Bus
 from wrapper_backend.geometry import Geometry
 from wrapper_backend.multicast import Multicast
@@ -52,6 +53,7 @@ async def _main() -> None:
     bus = Bus()
     multicast = Multicast(bus, args.vision_ip, args.vision_port)
     geometry = Geometry(bus, args.geometry)
+    cameras = Cameras(bus)
 
     http_app = web.Application(middlewares=[_cors_middleware])
     websocket.register(http_app, bus)
@@ -71,10 +73,12 @@ async def _main() -> None:
     await http_site.start()
     log.info("http+ws listening on %s:%d", args.host, args.port)
 
+    cameras_task = asyncio.create_task(cameras.run(), name="cameras")
     try:
         await multicast.start()
         await geometry.run()
     finally:
+        cameras_task.cancel()
         await http_runner.cleanup()
         await multicast.close()
 

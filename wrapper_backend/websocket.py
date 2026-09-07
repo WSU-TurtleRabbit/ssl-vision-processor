@@ -1,7 +1,8 @@
 """WebSocket bridge from the bus to browser clients.
 
-Each connected client owns a size-1 outbound queue (slow clients drop
-intermediate frames, matching the bus's watch-channel semantics).
+Each connected client keeps the latest outbound frame per topic (slow
+clients drop intermediate frames, matching the bus's watch-channel
+semantics, but a busy topic never starves a quiet one).
 
 A "channel" represents one bus topic. The bus is read lazily: when the
 first client joins a channel its bus-reader task starts; when the last
@@ -43,24 +44,33 @@ def _encode_proto_message(payload: Any) -> dict[str, Any]:
 
 # Encoders convert the raw bus payload for a topic into a JSON-serialisable
 # dict. Topics not present here cannot be exposed to clients.
+def _encode_identity(payload: dict[str, Any]) -> dict[str, Any]:
+    return payload
+
+
 _TOPIC_ENCODERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "wrapper_packet.out": _encode_wrapper_packet,
     "detection.in": _encode_proto_message,
+    "cameras.out": _encode_identity,
 }
 
 
 class _Client:
     def __init__(self, websocket: web.WebSocketResponse) -> None:
         self._websocket = websocket
-        self._outbox: asyncio.Queue[str] = asyncio.Queue(maxsize=1)
+        # Latest frame per topic, not one shared slot. A single slot lets a
+        # high-rate topic starve a low-rate one outright: detection.in arrives
+        # ~20x/s and would overwrite the 1x/s cameras.out frame every time
+        # before the sender woke, so that topic never got delivered at all.
+        # Keeping one slot per topic preserves the intended "slow clients see
+        # only the latest" behaviour without dropping topics on the floor.
+        self._pending: dict[str, str] = {}
+        self._wakeup = asyncio.Event()
         self.topics: set[str] = set()
 
-    def post(self, frame: str) -> None:
-        try:
-            self._outbox.get_nowait()
-        except asyncio.QueueEmpty:
-            pass
-        self._outbox.put_nowait(frame)
+    def post(self, topic: str, frame: str) -> None:
+        self._pending[topic] = frame
+        self._wakeup.set()
 
     async def send_error(self, message: str, topic: str | None = None) -> None:
         payload: dict[str, str] = {"error": message}
@@ -70,10 +80,13 @@ class _Client:
 
     async def deliver_forever(self) -> None:
         while True:
-            frame = await self._outbox.get()
-            if self._websocket.closed:
-                return
-            await self._websocket.send_str(frame)
+            await self._wakeup.wait()
+            self._wakeup.clear()
+            pending, self._pending = self._pending, {}
+            for frame in pending.values():
+                if self._websocket.closed:
+                    return
+                await self._websocket.send_str(frame)
 
 
 class _Channel:
@@ -171,7 +184,7 @@ class _TopicBridge:
                     log.exception("dropping unencodable payload on %s", topic)
                     continue
                 for client in self._channels[topic].clients:
-                    client.post(frame)
+                    client.post(topic, frame)
         finally:
             self._bus.unsubscribe(topic, queue)
 

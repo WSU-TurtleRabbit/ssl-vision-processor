@@ -33,10 +33,21 @@ def register(http_app: web.Application, img_dir: Path) -> None:
     async def file_handler(request: web.Request) -> web.FileResponse:
         cam_id = request.match_info["cam_id"]
         view = request.match_info["view"]
-        matches = list(img_dir.glob(f"{cam_id}.{view}.*"))
+        # The C++ SnapshotWriter writes "<name>.tmp" then renames it into
+        # place, so a bare glob can match a temporary that is gone by the time
+        # FileResponse opens it. Match only finished images.
+        matches = [
+            path
+            for path in img_dir.glob(f"{cam_id}.{view}.*")
+            if path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        ]
         if not matches:
             raise web.HTTPNotFound
-        return web.FileResponse(max(matches, key=lambda p: p.stat().st_mtime))
+        try:
+            newest = max(matches, key=lambda p: p.stat().st_mtime)
+        except FileNotFoundError:
+            raise web.HTTPNotFound from None
+        return web.FileResponse(newest)
 
     http_app.router.add_get("/snapshots", list_handler)
     http_app.router.add_get("/snapshot/{cam_id}/{view}", file_handler)

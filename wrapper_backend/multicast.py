@@ -35,6 +35,20 @@ class _MulticastToBus(asyncio.DatagramProtocol):
             self._bus.publish("geometry.in", packet.geometry)
         if packet.HasField("detection"):
             self._bus.publish("detection.in", packet.detection)
+            # The sender address exists only here, at the socket. Publish the
+            # few scalars cameras.py needs rather than widening detection.in,
+            # which the frontend already consumes as a plain SSL_DetectionFrame.
+            detection = packet.detection
+            self._bus.publish(
+                "camera_frame.in",
+                {
+                    "camera_id": detection.camera_id,
+                    "address": addr[0],
+                    "frame_number": detection.frame_number,
+                    "t_capture": detection.t_capture,
+                    "t_sent": detection.t_sent,
+                },
+            )
 
 
 class _BusToMulticast:
