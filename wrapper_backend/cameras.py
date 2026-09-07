@@ -46,9 +46,9 @@ class _Camera:
         self.last_seen = 0.0
         self.last_frame_number = 0
         self.latency_s = 0.0
-        # (monotonic, frame_number) samples trimmed to RATE_WINDOW_S.
-        self.samples: list[tuple[float, int]] = []
-        self.messages_seen = 0
+        # (local monotonic, sender t_capture, frame_number, cumulative
+        # arrivals) trimmed to RATE_WINDOW_S.
+        self.samples: list[tuple[float, float, int, int]] = []
 
     def observe(self, frame: dict[str, Any], now: float) -> None:
         self.address = frame["address"]
@@ -58,18 +58,46 @@ class _Camera:
         # agreement between machines: it is the detector's own capture-to-send
         # time, not an end-to-end network latency.
         self.latency_s = frame["t_sent"] - frame["t_capture"]
-        self.messages_seen += 1
-        self.samples.append((now, frame["frame_number"]))
+        self.samples.append(
+            (now, frame["t_capture"], frame["frame_number"], frame["received"])
+        )
         cutoff = now - RATE_WINDOW_S
         while len(self.samples) > 2 and self.samples[0][0] < cutoff:
             self.samples.pop(0)
 
-    def fps(self) -> float:
+    def capture_fps(self) -> float:
+        """The rate the camera is actually capturing at.
+
+        Frame numbers over t_capture, both stamped by the sender, so this is
+        measured entirely on the detector's own clock: no agreement with our
+        clock is needed and network jitter cannot affect it. Frame numbers are
+        monotonic, so dropped datagrams do not bias it - a gap enlarges the
+        numerator and denominator together.
+        """
         if len(self.samples) < 2:
             return 0.0
-        (t0, f0), (t1, f1) = self.samples[0], self.samples[-1]
-        elapsed = t1 - t0
-        return (f1 - f0) / elapsed if elapsed > 0 else 0.0
+        first, last = self.samples[0], self.samples[-1]
+        elapsed = last[1] - first[1]
+        return (last[2] - first[2]) / elapsed if elapsed > 0 else 0.0
+
+    def received_fps(self) -> float:
+        """The rate datagrams are actually reaching us, on our clock."""
+        if len(self.samples) < 2:
+            return 0.0
+        first, last = self.samples[0], self.samples[-1]
+        elapsed = last[0] - first[0]
+        return (last[3] - first[3]) / elapsed if elapsed > 0 else 0.0
+
+    def loss_percent(self) -> float:
+        """How much of what the detector produced never arrived."""
+        if len(self.samples) < 2:
+            return 0.0
+        first, last = self.samples[0], self.samples[-1]
+        produced = last[2] - first[2]
+        arrived = last[3] - first[3]
+        if produced <= 0:
+            return 0.0
+        return max(0.0, round(100.0 * (produced - arrived) / produced, 1))
 
     def to_dict(self, now: float) -> dict[str, Any]:
         online = (now - self.last_seen) <= ONLINE_TIMEOUT_S
@@ -78,7 +106,9 @@ class _Camera:
             "address": self.address,
             "name": self.hostname or self.address,
             "online": online,
-            "fps": round(self.fps(), 1),
+            "fps": round(self.capture_fps(), 1),
+            "received_fps": round(self.received_fps(), 1),
+            "loss_percent": self.loss_percent(),
             "latency_ms": round(self.latency_s * 1000.0, 1),
             "frame_number": self.last_frame_number,
             "age_s": round(now - self.last_seen, 2) if self.last_seen else None,

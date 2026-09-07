@@ -22,6 +22,12 @@ log = logging.getLogger("wrapper_backend.multicast")
 class _MulticastToBus(asyncio.DatagramProtocol):
     def __init__(self, bus: Bus) -> None:
         self._bus = bus
+        # Datagrams actually arriving, per camera. Counted here because this is
+        # the only place that sees every one: bus subscribers have size-1
+        # queues and drop messages, so nothing downstream can count arrivals.
+        # Publishing it cumulatively means a reader that missed messages still
+        # recovers the correct delta.
+        self._received: dict[int, int] = {}
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         packet = SSL_WrapperPacket()
@@ -39,14 +45,17 @@ class _MulticastToBus(asyncio.DatagramProtocol):
             # few scalars cameras.py needs rather than widening detection.in,
             # which the frontend already consumes as a plain SSL_DetectionFrame.
             detection = packet.detection
+            camera_id = detection.camera_id
+            self._received[camera_id] = self._received.get(camera_id, 0) + 1
             self._bus.publish(
                 "camera_frame.in",
                 {
-                    "camera_id": detection.camera_id,
+                    "camera_id": camera_id,
                     "address": addr[0],
                     "frame_number": detection.frame_number,
                     "t_capture": detection.t_capture,
                     "t_sent": detection.t_sent,
+                    "received": self._received[camera_id],
                 },
             )
 

@@ -278,6 +278,20 @@
     );
   });
 
+  // Every camera we could show something for. The roster is the good source
+  // but it depends on one endpoint; the snapshots on disk name their camera
+  // too, so the views stay reachable even when the roster is slow, empty or
+  // failing. Gating the buttons on the roster alone left them dead with a
+  // perfectly good image sitting on disk.
+  let selectableCameraIds = $derived.by<number[]>(() => {
+    const ids = cameraList.map((camera) => camera.camera_id);
+    for (const snapshot of snapshots) {
+      const id = Number(snapshot.cam_id);
+      if (Number.isFinite(id) && !ids.includes(id)) ids.push(id);
+    }
+    return ids.sort((a, b) => a - b);
+  });
+
   let isCombined = $derived(selectedCamera === "combine");
   let selectedCameraId = $derived(isCombined ? null : Number(selectedCamera));
   let selectedStatus = $derived(
@@ -1076,9 +1090,9 @@
    */
   function chooseView(view: string): void {
     if (isCombined) {
-      const first = cameraList[0];
-      if (!first) return;
-      selectedCamera = String(first.camera_id);
+      const first = selectableCameraIds[0];
+      if (first === undefined) return;
+      selectedCamera = String(first);
     }
     selectedView = view;
     refreshNow();
@@ -1179,9 +1193,10 @@
       <span>Camera</span>
       <select bind:value={selectedCamera} onchange={refreshNow}>
         <option value="combine">Combined ({combined.online}/{combined.count})</option>
-        {#each cameraList as camera (camera.camera_id)}
-          <option value={String(camera.camera_id)}>
-            {camera.camera_id} &middot; {camera.name}
+        {#each selectableCameraIds as id (id)}
+          <option value={String(id)}>
+            {id} &middot; {cameraList.find((camera) => camera.camera_id === id)?.name ??
+              `camera ${String(id)}`}
           </option>
         {/each}
       </select>
@@ -1191,7 +1206,7 @@
       <span>View</span>
       <select
         value={isCombined ? "" : selectedView}
-        disabled={cameraList.length === 0}
+        disabled={selectableCameraIds.length === 0}
         onchange={(event) => {
           chooseView(event.currentTarget.value);
         }}
@@ -1261,9 +1276,9 @@
           {#each cameraViews() as view (view)}
             <button
               class:active={!isCombined && view === selectedView}
-              disabled={cameraList.length === 0}
+              disabled={selectableCameraIds.length === 0}
               title={isCombined
-                ? `Show ${viewLabel(view)} for camera ${String(cameraList[0]?.camera_id ?? 0)}`
+                ? `Show ${viewLabel(view)} for camera ${String(selectableCameraIds[0] ?? 0)}`
                 : viewLabel(view)}
               onclick={() => {
                 chooseView(view);
