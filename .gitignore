@@ -5,6 +5,9 @@
 /python/proto
 /wrapper_backend/proto
 __pycache__
+# Generated C++ bindings live in /src/proto; keep them out of the source tree.
+/proto/*.pb.cc
+/proto/*.pb.h
 
 # Cam viewer
 *.sdp
