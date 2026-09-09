@@ -1,12 +1,27 @@
-# EXPERIMENTAL: lower-resolution, higher-rate capture.
+# EXPERIMENTAL - TESTED AND REJECTED, kept for reference.
 #
-# Copy of config-robocup-lab.yml with the camera switched to the ZED's
-# 1344x376 stereo mode at 60 fps. Not a drop-in replacement: the geometry
-# corners below are scaled rather than measured, so calibration must be
-# redone before this is used for anything that matters.
+# Lower-resolution, higher-rate capture: the ZED's 1344x376 stereo mode at
+# 60 fps, processed at 672x376 with no rescale. The geometry corners below
+# were measured against a real frame at this resolution rather than scaled,
+# so this is a fair test of the idea and not a broken config.
 #
-# Compare against the working config with:
-#   .venv/bin/python vision_probe.py --seconds 30 --label lowres
+# Measured 2026-09-09, 25 s each, same field contents:
+#
+#                        768x432 (working)   672x376 (this)
+#   detection rate       17.4 /s             23.3 /s
+#   robots per frame     2.00                0.35
+#   robot confidence     0.822               0.356
+#   ball present         100 %               0 %
+#
+# About a third more frames, for most of the detection. The ball is only
+# around five pixels across at 768x432 and the markers scale with it, so
+# removing an eighth of the linear resolution costs far more than the extra
+# frames are worth.
+#
+# Do not use this for play. The conclusion is that capture rate is not the
+# constraint - detection cost is, and that is set by OpenCL running on POCL
+# (CPU) because Tegra ships no OpenCL driver for the GPU.
+#
 cam_id: 0
 bot_heights_file: robot-heights.yml
 
@@ -36,24 +51,30 @@ camera:
 geometry:
   camera_amount: 1
   camera_height: 2000.0
+  # Both sets are for the 672x376 frame this config produces. The 1344x376
+  # stereo mode has a different field of view from 2560x720, so these are not
+  # a simple multiple of the 768x432 values - the earlier scaled guess was out
+  # by roughly 15 px in x.
+
   # Centers of the tape X markers: the absolute outside boundary edge.
-  # SCALED, NOT MEASURED. These are the 768x432 values multiplied by the
-  # resolution change (x0.875, y0.8704). They put the calibration in roughly
-  # the right place so the solver has a sane starting point, but corners are
-  # pixel coordinates and do not survive a resolution change intact - they
-  # must be re-measured against a 672x376 sample image before this config is
-  # trusted for play.
+  # DERIVED, NOT MEASURED - the old config's inner-to-outer offsets rescaled
+  # by px/mm (ratio 0.8336). The tape markers are not reliably detectable, so
+  # re-measure these by hand if the boundary extent matters.
   outer_line_corners:
-    - [46.380, 322.040]
-    - [50.750, 51.350]
-    - [558.250, 43.520]
-    - [559.120, 319.430]
-  # Inner white-line corners in the 672x376 calibrated frame.
+    - [59.108, 319.099]
+    - [62.590, 59.631]
+    - [546.099, 54.232]
+    - [546.616, 318.623]
+
+  # MEASURED against a real 672x376 frame: a line was fitted to each painted
+  # edge and the fits intersected, so these carry the field's slight tilt
+  # (about 1 deg on the left edge) rather than assuming an axis-aligned
+  # rectangle. Order is bottom-left, top-left, top-right, bottom-right.
   line_corners:
-    - [76.270, 295.580]
-    - [80.920, 71.200]
-    - [528.720, 66.840]
-    - [529.660, 295.050]
+    - [87.593, 293.757]
+    - [91.334, 78.638]
+    - [517.963, 76.565]
+    - [518.539, 295.272]
   refinement: false
   field_line_threshold: 35
   # Pixel-denominated, so scaled with the frame (80 * 0.875).
