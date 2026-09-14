@@ -66,18 +66,37 @@ thresholds:
   geometry_tolerance: 10.0
 
 color:
-  # Fixed field lighting: keep calibrated references from drifting on partial detections.
-  reference_force: 0.0
-  history_force: 1.0
-  orange: [255, 120, 40]
-  # Sampled from the carpet on 2026-09-14: the previous [42, 130, 67] was about
-  # twice the measured brightness. Correcting it took the ball from 94.2% to
-  # 99.7% of frames and removed a phantom robot id.
-  field: [21, 62, 30]
+  # Adaptive again as of 2026-09-14, after being frozen (0.0 / 1.0) for fixed
+  # lighting. Each frame the live colour is re-blended as
+  #   reference_force x (value below) + history_force x (previous) + rest x (observed)
+  # so the remaining 0.20 is what tracks the room as the day shifts.
+  #
+  # Measured over 60 s with the ball out, everything else unchanged:
+  #   frozen  (0.00 / 1.00)  ball confidence 0.786
+  #   this    (0.10 / 0.70)  ball confidence 0.978
+  # Robots were 2.00 per frame at ~0.80 with two clean ids either way.
+  #
+  # The old comment worried about drifting on partial detections. That is what
+  # reference_force guards: it pulls continuously back toward the values below,
+  # so drift is bounded rather than free-running. 0.10 anchors harder than 0.05
+  # and also measured slightly better, so it is the safer of the two.
+  reference_force: 0.10
+  history_force: 0.70
+  orange: [194, 121, 62]
+  # All six sampled from the live frame on 2026-09-14, taking the brightest
+  # third of each marker blob: edge pixels blend into the carpet and drag a
+  # plain mean toward green. yellow is unchanged because no yellow robot was
+  # on the field to measure.
+  #
+  # Swapping the old values for these changed nothing measurable on its own -
+  # with history_force at 1.0 the live colours were frozen at whatever the
+  # reference said, and both sets were close enough. They earn their place now
+  # that adaptation is on, where they are the anchor it is pulled back toward.
+  field: [13, 46, 26]
   yellow: [255, 220, 0]
-  blue: [45, 190, 255]
-  green: [70, 230, 190]
-  pink: [235, 90, 165]
+  blue: [22, 84, 202]
+  green: [72, 199, 134]
+  pink: [239, 126, 155]
 
 tracking:
   # At 25 FPS the filtered tracker velocity can lag the estimator by about
