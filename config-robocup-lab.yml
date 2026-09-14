@@ -41,17 +41,26 @@ geometry:
   max_line_segment_angle: 3.0
 
 thresholds:
+  # Lowered from 10.0 on 2026-09-14: at 10.0 the ball produced no blob at all
+  # (13 blobs seen, which is just the ten robot markers plus noise) and was
+  # detected in 0% of frames. The usable window is narrow - 3.0 still finds no
+  # ball, 1.5 and below invents robots - so 2.5 sits close to a cliff and is
+  # worth re-checking whenever the lighting changes.
   # Preserve fast-motion marker edges that are softened by the 25 FPS camera.
   # Robot hypotheses remain gated by the five-point geometry, calibrated
   # colors, identity pattern, and confidence checks below.
-  circularity: 10.0
+  circularity: 2.5
   score: 4.0
   blobs: 2000
-  # High-speed marker blur occasionally drops otherwise coherent Robot 4
-  # hypotheses below 0.15 for five frames.  Phoenix still requires three
-  # consistent observations before establishing a track and independently
-  # gates identity, heading, field position, and command freshness.
-  min_confidence: 0.10
+  # Raised from 0.10 to 0.15 on 2026-09-14. The lower circularity above admits
+  # more blobs, and at 0.10 that produced phantom robot ids (4 to 7 ids for the
+  # 2 robots actually present). 0.15 gives exactly 2 ids at 0.95 confidence.
+  # NOT yet validated under fast motion, which is what 0.10 was chosen for:
+  # the robots were stationary during this tuning.
+  # Phoenix still requires three consistent observations before establishing a
+  # track and independently gates identity, heading, field position, and
+  # command freshness.
+  min_confidence: 0.15
   min_cam_edge_distance: 120.0
   clipping_tolerance: 10.0
   geometry_tolerance: 10.0
@@ -61,7 +70,10 @@ color:
   reference_force: 0.0
   history_force: 1.0
   orange: [255, 120, 40]
-  field: [42, 130, 67]
+  # Sampled from the carpet on 2026-09-14: the previous [42, 130, 67] was about
+  # twice the measured brightness. Correcting it took the ball from 94.2% to
+  # 99.7% of frames and removed a phantom robot id.
+  field: [21, 62, 30]
   yellow: [255, 220, 0]
   blue: [45, 190, 255]
   green: [70, 230, 190]
