@@ -95,6 +95,14 @@
     config: DataMap;
   }
 
+  interface CalibrationResult {
+    sampled: Record<string, number[]>;
+    skipped: Record<string, string>;
+    applied: string[];
+    dry_run: boolean;
+    error?: string;
+  }
+
   interface GeometryResponse {
     path: string;
     modified_at: number;
@@ -184,6 +192,8 @@
   // and both should be readable whenever the backend is up at all.
   let geometryFile = $state<GeometryResponse | null>(null);
   let fieldHttp = $state<GeometryData | null>(null);
+  let calibration = $state<CalibrationResult | null>(null);
+  let calibrating = $state(false);
   // Which bundle the server is serving, versus the one this page is running.
   // A rebuild changes the fingerprinted filename, so a difference means the
   // page is stale - which is otherwise invisible, since a browser will reuse
@@ -1066,6 +1076,36 @@
     pumpFrame();
   }
 
+  /** Re-sample the colour references from the current frame.
+   *
+   * The backend samples only around objects the detector has actually
+   * reported, so a colour with nothing of it on the field is skipped rather
+   * than guessed at. The C++ side re-reads the config within about half a
+   * second, so this takes effect without restarting anything.
+   */
+  async function calibrateColours(): Promise<void> {
+    if (calibrating) return;
+    calibrating = true;
+    try {
+      const camera = selectedCameraId ?? 0;
+      const response = await fetch(api(`/api/calibrate/colors/${String(camera)}`), {
+        method: "POST",
+      });
+      calibration = (await response.json()) as CalibrationResult;
+      loadConfig();
+    } catch (error) {
+      calibration = {
+        sampled: {},
+        skipped: {},
+        applied: [],
+        dry_run: false,
+        error: String(error),
+      };
+    } finally {
+      calibrating = false;
+    }
+  }
+
   /** Reload the page without letting the browser reuse what it has cached.
    *
    * location.reload() revalidates but will still happily reuse a cached
@@ -1220,6 +1260,16 @@
 
     <button
       class="action"
+      disabled={calibrating}
+      title="Re-sample colour references from the current frame and write them to the camera config"
+      onclick={() => {
+        void calibrateColours();
+      }}
+    >
+      {calibrating ? "Calibrating..." : "Calibrate colours"}
+    </button>
+    <button
+      class="action"
       title="Clear cached files and reload the page from the server"
       onclick={() => {
         void hardReload();
@@ -1348,7 +1398,28 @@
       </section>
 
       <section class="panel">
-        <div class="section-heading compact"><h2>Color references</h2></div>
+        <div class="section-heading compact">
+          <h2>Color references</h2>
+          {#if calibration}
+            <span class="section-tag">
+              {calibration.error
+                ? "calibration failed"
+                : calibration.applied.length > 0
+                  ? `updated ${calibration.applied.join(", ")}`
+                  : "nothing to update"}
+            </span>
+          {/if}
+        </div>
+        {#if calibration && !calibration.error && Object.keys(calibration.skipped).length > 0}
+          <p class="calib-note">
+            Skipped: {Object.entries(calibration.skipped)
+              .map(([name, why]) => `${name} (${why})`)
+              .join("; ")}
+          </p>
+        {/if}
+        {#if calibration?.error}
+          <p class="calib-note">{calibration.error}</p>
+        {/if}
         <div class="color-list">
           {#each colorNames as name (name)}
             <div class="color-row">
@@ -2244,6 +2315,14 @@
     font-size: 12px;
     font-weight: 600;
     overflow-wrap: anywhere;
+  }
+
+  .calib-note {
+    margin: 0;
+    padding: 0 12px 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.5;
   }
 
   .corner-list {

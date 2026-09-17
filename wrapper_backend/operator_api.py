@@ -1,4 +1,10 @@
-"""Read-only operator API and static frontend hosting."""
+"""Read-only operator API and static frontend hosting.
+
+Named operator_api rather than operator because __init__.py puts this
+directory on sys.path so the generated protobuf modules can import each
+other, which would let a plain `operator.py` here shadow the standard
+library module of that name.
+"""
 
 from __future__ import annotations
 

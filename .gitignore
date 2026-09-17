@@ -38,3 +38,6 @@ CMakeCache.txt
 /.zed
 validation-baseline/
 logs/
+
+# Config backup written before a UI colour calibration.
+*.precalib

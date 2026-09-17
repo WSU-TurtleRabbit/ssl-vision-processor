@@ -82,7 +82,7 @@ color:
   # and also measured slightly better, so it is the safer of the two.
   reference_force: 0.10
   history_force: 0.70
-  orange: [194, 121, 62]
+  orange: [226, 155, 47]
   # All six sampled from the live frame on 2026-09-14, taking the brightest
   # third of each marker blob: edge pixels blend into the carpet and drag a
   # plain mean toward green. yellow is unchanged because no yellow robot was
@@ -92,11 +92,11 @@ color:
   # with history_force at 1.0 the live colours were frozen at whatever the
   # reference said, and both sets were close enough. They earn their place now
   # that adaptation is on, where they are the anchor it is pulled back toward.
-  field: [13, 46, 26]
+  field: [12, 48, 24]
   yellow: [255, 220, 0]
-  blue: [22, 84, 202]
-  green: [72, 199, 134]
-  pink: [239, 126, 155]
+  blue: [20, 125, 234]
+  green: [92, 232, 156]
+  pink: [204, 111, 136]
 
 tracking:
   # At 25 FPS the filtered tracker velocity can lag the estimator by about
