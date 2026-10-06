@@ -28,21 +28,27 @@ geometry:
   camera_height: 2000.0
   # Centers of the tape X markers: the absolute outside boundary edge.
   outer_line_corners:
-    - [53.000, 370.000]
-    - [58.000, 59.000]
-    - [638.000, 50.000]
-    - [639.000, 367.000]
+    - [638.0, 50.0]
+    - [639.0, 367.0]
+    - [53.0, 370.0]
+    - [58.0, 59.0]
   # Detected inner white-line corners in the 768x432 calibrated frame.
   line_corners:
-    - [87.170, 339.600]
-    - [92.480, 81.800]
-    - [604.250, 76.790]
-    - [605.320, 338.990]
+    - [638.0, 50.0]
+    - [639.0, 367.0]
+    - [53.0, 370.0]
+    - [58.0, 59.0]
   refinement: false
   field_line_threshold: 35
   min_line_segment_length: 80.0
   max_line_segment_offset: 10.0
   max_line_segment_angle: 3.0
+  distortion_lines:
+    - [[89.2, 73.5], [222.2, 71.5], [345.2, 68.5], [479.2, 68.5], [602.2, 72.5]]
+    - [[607.2, 76.5], [614.2, 134.5], [613.2, 212.5], [611.2, 293.5], [609.2, 350.5]]
+    - [[602.2, 349.5], [567.2, 351.5], [430.2, 353.5], [339.2, 350.5], [241.2, 346.5], [85.2, 346.5]]
+    - [[82.2, 339.5], [77.2, 280.5], [79.2, 207.5], [84.2, 132.5], [87.2, 81.5]]
+  line_corners_include_boundary: true
 
 thresholds:
   # Preserve fast-motion marker edges that are softened by the 25 FPS camera.
@@ -65,13 +71,13 @@ color:
   # reference_force x (value below) + history_force x (previous) + the rest x (observed).
   reference_force: 0.1
   history_force: 0.7
-  orange: [255, 120, 40]
+  orange: [180, 161, 37]
   # Carpet as the ZED SDK delivers it (auto exposure), measured 2026-10-06.
-  field: [27, 75, 48]
+  field: [128, 128, 128]
   yellow: [255, 220, 0]
   blue: [45, 190, 255]
-  green: [70, 230, 190]
-  pink: [235, 90, 165]
+  green: [64, 178, 143]
+  pink: [144, 113, 128]
 
 tracking:
   # At 25 FPS the filtered tracker velocity can lag the estimator by about
