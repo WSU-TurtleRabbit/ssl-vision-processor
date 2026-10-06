@@ -32,7 +32,7 @@ flowchart LR
 ```
 
 - **Frontend vs backend:** the backend does no image work. It merges the geometry, re-broadcasts it, and relays live data and snapshots. The frontend only displays what the backend sends.
-- **Jetson + Raspberry Pi camera:** setup, start-up order and troubleshooting are in [JETSON.md](JETSON.md); the Pi side is in [pi_camera/README.md](pi_camera/README.md).
+- **Jetson + Raspberry Pi camera:** start at [docs/README.md](docs/README.md). Something broke? [docs/panic.md](docs/panic.md). Daily use: [docs/start-stop.md](docs/start-stop.md). The Pi side is in [pi_camera/README.md](pi_camera/README.md).
 
 The `vision_processor` is the image processing component that processes a camera feed
 to multicast the detected robot and ball positions and a debug video livestream.
