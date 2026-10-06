@@ -206,6 +206,22 @@ void filterBallsAtCamEdge(const Resources& r, std::list<std::unique_ptr<BallHypo
 	}
 }
 
+// Two balls cannot physically overlap. A single ball with a strong highlight/shadow side
+// (directional sunlight) can produce two blob centers a few mm apart; keep the better scored one.
+void filterClippingBallBallHypotheses(const Resources& r, std::list<std::unique_ptr<BallHypothesis>>& balls) {
+	const float minDistance = 2.0f * r.perspective->field.ball_radius() - r.clippingTolerance;
+	const float sqMinDistance = minDistance * minDistance;
+	balls.sort([](const auto& a, const auto& b) { return a->score > b->score; });
+	for(auto it = balls.begin(); it != balls.end(); it++) {
+		for(auto other = std::next(it); other != balls.end(); ) {
+			if(((*other)->pos - (*it)->pos).squaredNorm() < sqMinDistance)
+				other = balls.erase(other);
+			else
+				other++;
+		}
+	}
+}
+
 void filterClippingBotBotHypotheses(const Resources& r, std::list<std::unique_ptr<BotHypothesis>>& bots) {
 	for (auto it1 = bots.cbegin(); it1 != bots.cend(); ) {
 		const auto& bot1 = *it1;
@@ -449,6 +465,7 @@ int main(int argc, char* argv[]) {
 			filterHypothesesScore(ballHypotheses, r.minConfidence);
 			filterBallsAtCamEdge(r, ballHypotheses);
 			filterStddevScore(ballHypotheses, (float)r.minScore);
+			filterClippingBallBallHypotheses(r, ballHypotheses);
 
 			SSL_WrapperPacket wrapper;
 			wrapper.set_source(SSL_SOURCE_VISION_PROCESSOR);
