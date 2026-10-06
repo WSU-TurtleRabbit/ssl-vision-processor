@@ -10,8 +10,11 @@ camera:
   # Per-eye sensor mode: height 720 = HD720 (1280x720), up to 60 FPS on the ZED 2i.
   width: 1280
   height: 720
-  fps: 30
-  # Resized on the GPU by the ZED SDK. Keep 768x432: the ball is only ~5 px across here.
+  # Measured 2026-10-06, same field, 30 s each: 60 FPS keeps robots 2.00/frame, ball 100 %, confidence
+  # unchanged vs 30 FPS, and cuts capture->sent latency 3.9 -> 2.7 ms (~4 ms/frame, 0.7 CPU core).
+  fps: 60
+  # Resized on the GPU by the ZED SDK. Keep 768x432: processing the full 1280x720 was measured worse
+  # (54 FPS, ~15 ms/frame, robot confidence 0.656 -> 0.605, latency 13 ms) with no ball gain.
   output_width: 768
   output_height: 432
   # false = the raw left image, geometrically the same as the old V4L2 left-half crop, so the
