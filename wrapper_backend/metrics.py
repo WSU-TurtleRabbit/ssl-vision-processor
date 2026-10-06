@@ -22,6 +22,7 @@ import collections
 import contextlib
 import statistics
 import time
+from collections.abc import Callable
 from typing import Any
 
 from aiohttp import web
@@ -61,7 +62,8 @@ def summarize(samples: collections.deque[Sample], now: float) -> dict[str, Any]:
     }
 
 
-def register(http_app: web.Application, bus: Bus) -> None:
+def register(http_app: web.Application, bus: Bus) -> Callable[[], dict[str, Any]]:
+    """Registers the route; returns a snapshot function (used by the receipt)."""
     cameras: dict[int, collections.deque[Sample]] = {}
     task_key = web.AppKey("metrics_task", asyncio.Task[None])
 
@@ -105,3 +107,12 @@ def register(http_app: web.Application, bus: Bus) -> None:
     http_app.router.add_get("/api/metrics", handler)
     http_app.on_startup.append(start)
     http_app.on_cleanup.append(stop)
+
+    def snapshot() -> dict[str, Any]:
+        now = time.time()
+        return {
+            str(cam): summarize(samples, now)
+            for cam, samples in sorted(cameras.items())
+        }
+
+    return snapshot

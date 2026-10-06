@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import DrgbPlane from "./DrgbPlane.svelte";
 
   // Colour calibration: learned vs reference blob colours from
   // GET /api/colors, "save learned as reference", and a fallback picker
@@ -53,58 +54,73 @@
   } = $props();
 
   let auto = $state<AutoStatus | null>(null);
-  // Manual override: editable reference numbers per colour (Enter saves).
-  let drafts = $state<Record<string, [string, string, string]>>({});
+  // Manual override on the dRGB plane (DrgbPlane) or as a dRGB triple in
+  // the text field (Enter saves, Esc reverts). Values are saved as they are
+  // (dRGB), projected onto the plane (channel sum ~382) when needed.
+  let editing = $state<string | null>(null);
+  let draft = $state("");
+  let draftHint = $state<string | null>(null);
+  const DRGB_SUM = 382;
+  // Upstream defaults (dRGB, passed through unchanged).
+  const DEFAULTS: Record<string, Rgb> = {
+    orange: [192, 128, 64],
+    field: [128, 128, 128],
+    yellow: [255, 128, 0],
+    blue: [0, 128, 255],
+    green: [0, 255, 128],
+    pink: [255, 0, 128],
+  };
 
-  function draftOf(name: string, reference: unknown): [string, string, string] {
-    const draft = drafts[name];
-    if (draft) return draft;
-    const rgb = asRgb(reference);
-    return rgb
-      ? [
-          String(Math.round(rgb[0])),
-          String(Math.round(rgb[1])),
-          String(Math.round(rgb[2])),
-        ]
-      : ["", "", ""];
+  function projectToPlane(d: Rgb): Rgb {
+    const shift = (DRGB_SUM - (d[0] + d[1] + d[2])) / 3;
+    return d.map((c) => clampByte(c + shift)) as Rgb;
   }
 
-  function draftDirty(name: string, reference: unknown): boolean {
-    const draft = drafts[name];
-    if (!draft) return false;
-    const rgb = asRgb(reference);
-    return (
-      !rgb || draft.some((v, i) => Number(v) !== Math.round(rgb[i] ?? NaN))
+  function parseDrgbText(text: string): Rgb | null {
+    const parts = text
+      .trim()
+      .split(/[\s,;]+/)
+      .filter(Boolean)
+      .map(Number);
+    return parts.length === 3 &&
+      parts.every((c) => Number.isInteger(c) && c >= 0 && c <= 255)
+      ? (parts as Rgb)
+      : null;
+  }
+
+  async function saveDrgb(name: string, drgb: Rgb): Promise<void> {
+    await save(
+      { colors: { [name]: drgb } },
+      `Saved ${name} reference (dRGB ${drgb.join(", ")})`,
     );
-  }
-
-  function setDraft(
-    name: string,
-    reference: unknown,
-    channel: number,
-    value: string,
-  ): void {
-    const next = [...draftOf(name, reference)] as [string, string, string];
-    next[channel] = value;
-    drafts = { ...drafts, [name]: next };
-  }
-
-  function dropDraft(name: string): void {
-    drafts = Object.fromEntries(
-      Object.entries(drafts).filter(([key]) => key !== name),
-    );
+    if (message?.kind === "ok") draft = drgb.join(", ");
   }
 
   async function saveDraft(name: string): Promise<void> {
-    const draft = drafts[name];
-    if (!draft) return;
-    const rgb = draft.map((v) => Math.round(Number(v)));
-    if (rgb.some((c) => !Number.isFinite(c) || c < 0 || c > 255)) {
-      message = { kind: "error", text: `${name}: three numbers 0..255` };
+    const parsed = parseDrgbText(draft);
+    if (!parsed) {
+      message = {
+        kind: "error",
+        text: `${name}: three integers 0–255, e.g. 198, 142, 31`,
+      };
       return;
     }
-    await save({ colors: { [name]: rgb } }, `Saved ${name} reference`);
-    if (message?.kind === "ok") dropDraft(name);
+    const sum = parsed[0] + parsed[1] + parsed[2];
+    const drgb = sum < 378 || sum > 386 ? projectToPlane(parsed) : parsed;
+    draftHint =
+      drgb !== parsed ? `adjusted to the dRGB plane: ${drgb.join(", ")}` : null;
+    await saveDrgb(name, drgb);
+  }
+
+  function startEdit(name: string, reference: unknown): void {
+    editing = editing === name ? null : name;
+    draft = formatRgb(reference);
+    draftHint = null;
+  }
+
+  async function resetDefault(name: string): Promise<void> {
+    const rgb = DEFAULTS[name];
+    if (rgb) await saveDrgb(name, rgb);
   }
 
   const names = ["orange", "field", "yellow", "blue", "green", "pink"];
@@ -379,7 +395,7 @@
 <section class="color-panel">
   <div class="section-heading">
     <div>
-      <h2>Colours</h2>
+      <h2>COLOURS</h2>
       <p>
         {cameraLabel || `Camera ${camId}`} · learned vs reference blob colours (dRGB,
         brightness removed)
@@ -433,42 +449,26 @@
             </td>
             <td>
               <span class="swatch-cell">
-                <span
+                <button
                   class="swatch"
                   class:empty={!asRgb(reference)}
+                  class:active={editing === name}
                   style={`background: ${previewCss(reference)}`}
-                  title="Hue preview (brightness removed)"
-                ></span>
-                {#each [0, 1, 2] as channel (channel)}
-                  <input
-                    class="channel"
-                    type="number"
-                    min="0"
-                    max="255"
-                    aria-label={`${name} reference channel ${String(channel + 1)}`}
-                    value={draftOf(name, reference)[channel]}
-                    oninput={(event) => {
-                      setDraft(
-                        name,
-                        reference,
-                        channel,
-                        event.currentTarget.value,
-                      );
-                    }}
-                    onkeydown={(event) => {
-                      if (event.key === "Enter") void saveDraft(name);
-                      if (event.key === "Escape") dropDraft(name);
-                    }}
-                  />
-                {/each}
-                {#if draftDirty(name, reference)}
-                  <button
-                    class="primary small"
-                    disabled={saving}
-                    title="Enter"
-                    onclick={() => saveDraft(name)}>Save</button
-                  >
-                {/if}
+                  title="Edit on the dRGB plane"
+                  aria-label={`edit ${name} reference`}
+                  onclick={() => {
+                    startEdit(name, reference);
+                  }}
+                ></button>
+                <code title="stored dRGB (brightness-free)"
+                  >{formatRgb(reference)}</code
+                >
+                <button
+                  class="ghost small"
+                  disabled={saving}
+                  title={`Reset ${name} to the default (dRGB ${(DEFAULTS[name] ?? []).join(", ")})`}
+                  onclick={() => resetDefault(name)}>↺</button
+                >
               </span>
             </td>
             <td class="actions">
@@ -487,6 +487,52 @@
     </table>
   </div>
 
+  {#if editing}
+    {@const current = live
+      ? colors?.reference?.[editing]
+      : configColors[editing]}
+    <div class="plane-editor">
+      <DrgbPlane
+        value={asRgb(current)}
+        learned={live ? asRgb(colors?.learned?.[editing]) : null}
+        onpick={(drgb: Rgb) => void saveDrgb(editing ?? "", drgb)}
+      />
+      <div class="plane-side">
+        <strong class="name">{editing}</strong>
+        <label>
+          dRGB
+          <input
+            class="rgb-text"
+            bind:value={draft}
+            placeholder="198, 142, 31"
+            onkeydown={(event) => {
+              if (event.key === "Enter") void saveDraft(editing ?? "");
+              if (event.key === "Escape") {
+                draft = formatRgb(current);
+                draftHint = null;
+              }
+            }}
+          />
+        </label>
+        <span class="buttons">
+          <button
+            class="primary small"
+            disabled={saving}
+            onclick={() => saveDraft(editing ?? "")}>Save</button
+          >
+          <button class="ghost small" onclick={() => (editing = null)}
+            >Close</button
+          >
+        </span>
+        {#if draftHint}<small>{draftHint}</small>{/if}
+        <small>
+          Ring = reference, dot = learned. Brightness is ignored: the plane only
+          holds hue and saturation; drag toward a corner for a stronger colour.
+        </small>
+      </div>
+    </div>
+  {/if}
+
   <div class="footer-row">
     <span class="forces">
       <strong>Auto:</strong>
@@ -499,8 +545,8 @@
           ? `Sampling... ${String(Math.round((auto.progress ?? 0) * 100))}%`
           : "Auto-calibrate colours"}</button
       >
-      &nbsp;<strong>Manual:</strong> edit the Reference numbers (Enter saves) or
-      <em>Pick</em> the colour from the image.
+      &nbsp;<strong>Manual:</strong> click a swatch to edit it on the dRGB plane
+      or type the dRGB triple (Enter saves), or <em>Pick</em> from the image.
     </span>
     <span class="forces">
       reference_force <strong>{forces.reference ?? "--"}</strong>
@@ -601,20 +647,14 @@
 <style>
   .color-panel {
     min-width: 0;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    background: var(--surface);
-    overflow: hidden;
   }
 
   .section-heading {
-    min-height: 54px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border);
+    padding: 0 0 4px;
   }
 
   h2,
@@ -729,15 +769,48 @@
     border-radius: 3px;
   }
 
-  input.channel {
-    width: 3.4em;
-    padding: 1px 3px;
+  button.swatch {
+    padding: 0;
+    cursor: pointer;
+  }
+
+  button.swatch.active {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  input.rgb-text {
+    width: 9em;
+    padding: 1px 4px;
     color: var(--text);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 3px;
     font: inherit;
     font-size: 11px;
+  }
+
+  .plane-editor {
+    display: flex;
+    gap: 12px;
+    padding: 8px 0;
+  }
+
+  .plane-side {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  .plane-side .name {
+    text-transform: capitalize;
+  }
+
+  .plane-side small {
+    color: var(--text-muted);
+    font-size: 11px;
+    max-width: 260px;
   }
 
   button.small {

@@ -171,8 +171,17 @@ Each file is one module. In rough "outside-in" order:
   for the current run and while newer than its last status line.
 - `POST /api/config/debug-interval {"interval_ms": N}` — sets
   `debug.debug_stream_interval_ms` (snapshot refresh rate; 0 = off) in the
-  vision config, comment-preserving; vision_processor reloads it live. Used
-  by the pop-out camera window (`/popout?cam=0&view=raw`, served like `/`).
+  vision config, comment-preserving; vision_processor reloads it live.
+- **`gamecontroller.py`** — joins the referee multicast (`gc_ip:gc_port` from
+  the vision config, default 224.5.23.1:10003), parses `Referee` packets and
+  reports stage, command, team names/scores and the packet age in
+  `/api/health` → `services.game_controller` (`running` = a packet in the last
+  5 s; `process_running`/`pid` if an `ssl-game-controller` process exists).
+- `GET /api/receipt[?download=1]` — one JSON with everything (generated_at,
+  git commit, vision build device line, geometry, cameras with Pi status /
+  calibration / lens / solved model, colours, services incl. game controller,
+  last errors, performance, 20-line log tails); `download=1` serves it as an
+  attachment. The UI's Receipt view prints it.
 - **`yamledit.py`** — the comment-preserving, line-based YAML section editor
   (with atomic write) used by `colors.py` and `calibration.py`.
 - **`operator.py`** — `GET /api/config`, `GET /api/health` (services: Pi

@@ -40,11 +40,11 @@ color:
   # If teams/IDs start flipping, raise reference_force again (max 0.5 - history_force/2).
   reference_force: 0.1
   history_force: 0.7
-  orange: [192, 128, 64]
-  field: [128, 128, 128]
+  orange: [216, 108, 54]
+  field: [122, 127, 129]
   blue: [0, 128, 255]
-  green: [0, 255, 128]
-  pink: [255, 0, 128]
+  green: [81, 171, 119]
+  pink: [191, 71, 110]
   yellow: [255, 128, 0]
 
 network:

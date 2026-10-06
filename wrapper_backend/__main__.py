@@ -25,6 +25,7 @@ from wrapper_backend import (
     colors,
     docs,
     fieldgeometry,
+    gamecontroller,
     logs,
     metrics,
     operator,
@@ -133,7 +134,12 @@ async def _main() -> None:
     )
     calibration.register(http_app, field_calibration)
     fieldgeometry.register(http_app, geometry)
-    metrics.register(http_app, bus)
+    metrics_snapshot = metrics.register(http_app, bus)
+    network = calibration.read_config(args.vision_config).get("network")
+    network = network if isinstance(network, dict) else {}
+    gc = gamecontroller.GameController(
+        str(network.get("gc_ip", "224.5.23.1")), int(network.get("gc_port", 10003))
+    )
     docs.register(http_app, REPO_ROOT)
     token_file = args.camera_token_file
     if token_file is None and (REPO_ROOT / ".camera-token").is_file():
@@ -161,6 +167,9 @@ async def _main() -> None:
         field_calibration,
         LOGS_DIR,
         camera_log,
+        gc,
+        metrics_snapshot,
+        REPO_ROOT,
     )
 
     http_runner = web.AppRunner(http_app)
@@ -171,8 +180,10 @@ async def _main() -> None:
 
     try:
         await multicast.start()
+        await gc.start()
         await geometry.run()
     finally:
+        gc.close()
         await http_runner.cleanup()
         await multicast.close()
 

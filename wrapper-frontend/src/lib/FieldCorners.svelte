@@ -60,6 +60,7 @@
   let error = $state<string | null>(null);
   let dragIndex: number | null = null;
   let svg = $state<SVGSVGElement>();
+  let showHelp = $state(false);
 
   let ordered = $derived(points.length === 4 ? orderCorners(points) : null);
   let convex = $derived(ordered !== null && isConvex(ordered));
@@ -453,6 +454,12 @@
   <div class="instructions">
     <p class="camera-label">
       <strong>{cameraLabel || `Camera ${camId}`}</strong> (cam {camId})
+      <button
+        class="help-toggle"
+        onclick={() => {
+          showHelp = !showHelp;
+        }}>{showHelp ? "hide help" : "help ?"}</button
+      >
     </p>
     <div class="mode" role="radiogroup" aria-label="What you click">
       <span>I click:</span>
@@ -473,113 +480,118 @@
       The camera angle does not matter — the calibration solves tilt and rotation
       itself; only the corner order fixes the field's coordinate frame.
     </p>
-    <ol>
-      <li>
-        Click <strong>corner 1</strong>: the corner on the origin side, i.e.
-        towards field position (−x, −y). With the long side running left–right
-        on screen that is usually the <em>bottom-left</em> corner.
-      </li>
-      <li>
-        Click the other three corners <strong>going clockwise</strong> (as seen
-        on screen). Side 1→2 must be a short side ({mm(clickedWidth)}), side 2→3
-        a long side ({mm(clickedLength)}).
-      </li>
-    </ol>
-    <p>
-      {#if mode === "outer"}
-        You click the outer edge <strong
-          >{mm(clickedLength)} × {mm(clickedWidth)}</strong
-        >; the field is <strong>{mm(fieldLength)} × {mm(fieldWidth)}</strong>
-        with a {mm(boundaryWidth)} boundary{boundaryGoalLine !== boundaryWidth
-          ? ` (${mm(boundaryGoalLine)} behind the goal lines)`
-          : ""}. The field corners (dashed) are derived from your clicks with a
-        flat homography, so lens distortion is ignored.
-      {:else}
-        You click the field corners of the published field <strong
-          >{mm(fieldLength)} × {mm(fieldWidth)}</strong
-        >.
-      {/if}
-      Robot and ball positions are reported relative to the field ((0, 0) is its centre).
-      The clicked rectangle must really have that size, otherwise the scale is wrong
-      and robots are not recognised. Drag a marker to adjust it; Esc cancels.
-    </p>
-    <ShortcutLegend />
+    {#if showHelp}
+      <ol>
+        <li>
+          Click <strong>corner 1</strong>: the corner on the origin side, i.e.
+          towards field position (−x, −y). With the long side running left–right
+          on screen that is usually the <em>bottom-left</em> corner.
+        </li>
+        <li>
+          Click the other three corners <strong>going clockwise</strong> (as
+          seen on screen). Side 1→2 must be a short side ({mm(clickedWidth)}),
+          side 2→3 a long side ({mm(clickedLength)}).
+        </li>
+      </ol>
+      <p>
+        {#if mode === "outer"}
+          You click the outer edge <strong
+            >{mm(clickedLength)} × {mm(clickedWidth)}</strong
+          >; the field is <strong>{mm(fieldLength)} × {mm(fieldWidth)}</strong>
+          with a {mm(boundaryWidth)} boundary{boundaryGoalLine !== boundaryWidth
+            ? ` (${mm(boundaryGoalLine)} behind the goal lines)`
+            : ""}. The field corners (dashed) are derived from your clicks with
+          a flat homography, so lens distortion is ignored.
+        {:else}
+          You click the field corners of the published field <strong
+            >{mm(fieldLength)} × {mm(fieldWidth)}</strong
+          >.
+        {/if}
+        Robot and ball positions are reported relative to the field ((0, 0) is its
+        centre). The clicked rectangle must really have that size, otherwise the scale
+        is wrong and robots are not recognised. Drag a marker to adjust it; Esc cancels.
+      </p>
+      <ShortcutLegend />
+    {/if}
   </div>
 
   <div class="stage">
     {#if imageUrl}
-      <img
-        src={imageUrl}
-        alt={`${cameraLabel || `Camera ${camId}`} raw snapshot for field corners`}
-        onload={(event) => {
-          const image = event.currentTarget as HTMLImageElement;
-          width = image.naturalWidth || width;
-          height = image.naturalHeight || height;
-        }}
-      />
-      <svg
-        bind:this={svg}
-        viewBox={`0 0 ${String(width)} ${String(height)}`}
-        preserveAspectRatio="none"
-        role="application"
-        aria-label="Click the four field corners"
-        onpointerdown={onPointerDown}
-        onpointermove={onPointerMove}
-        onpointerup={onPointerUp}
-        onpointercancel={onPointerUp}
-      >
-        {#if points.length >= 2}
-          <polygon
-            class:closed={points.length === 4}
-            class:invalid={points.length === 4 && !convex}
-            points={points.map((p) => p.join(",")).join(" ")}
-          />
-        {/if}
-        {#if inner}
-          <polygon
-            class="inner"
-            points={inner.map((p) => p.join(",")).join(" ")}
-          />
-          {#each inner as corner, index (index)}
-            <circle
-              class="inner-corner"
-              cx={corner[0]}
-              cy={corner[1]}
-              r={markerRadius * 0.6}
+      <div class="frame">
+        <img
+          src={imageUrl}
+          alt={`${cameraLabel || `Camera ${camId}`} raw snapshot for field corners`}
+          onload={(event) => {
+            const image = event.currentTarget as HTMLImageElement;
+            width = image.naturalWidth || width;
+            height = image.naturalHeight || height;
+          }}
+        />
+        <svg
+          bind:this={svg}
+          viewBox={`0 0 ${String(width)} ${String(height)}`}
+          preserveAspectRatio="none"
+          role="application"
+          aria-label="Click the four field corners"
+          onpointerdown={onPointerDown}
+          onpointermove={onPointerMove}
+          onpointerup={onPointerUp}
+          onpointercancel={onPointerUp}
+        >
+          {#if points.length >= 2}
+            <polygon
+              class:closed={points.length === 4}
+              class:invalid={points.length === 4 && !convex}
+              points={points.map((p) => p.join(",")).join(" ")}
             />
+          {/if}
+          {#if inner}
+            <polygon
+              class="inner"
+              points={inner.map((p) => p.join(",")).join(" ")}
+            />
+            {#each inner as corner, index (index)}
+              <circle
+                class="inner-corner"
+                cx={corner[0]}
+                cy={corner[1]}
+                r={markerRadius * 0.6}
+              />
+            {/each}
+          {/if}
+          {#each edgeLabels as label (label.key)}
+            <text
+              class="edge"
+              x={label.mid[0]}
+              y={label.mid[1]}
+              font-size={fontSize * 0.85}>{label.text}</text
+            >
           {/each}
-        {/if}
-        {#each edgeLabels as label (label.key)}
-          <text
-            class="edge"
-            x={label.mid[0]}
-            y={label.mid[1]}
-            font-size={fontSize * 0.85}>{label.text}</text
-          >
-        {/each}
-        {#each points as point, index (index)}
-          <circle
-            data-index={index}
-            class:origin={index === 0}
-            class:selected={index === selected}
-            cx={point[0]}
-            cy={point[1]}
-            r={markerRadius}
-          />
-          <text
-            class="number"
-            text-anchor={point[0] > width * 0.8 ? "end" : "start"}
-            x={point[0] + (point[0] > width * 0.8 ? -1.4 : 1.4) * markerRadius}
-            y={point[1] < height * 0.1
-              ? point[1] + markerRadius * 3
-              : point[1] - markerRadius * 1.4}
-            font-size={fontSize}
-            >{index + 1} · {QUADRANT[index] ?? ""}{index === 0
-              ? " (origin)"
-              : ""}</text
-          >
-        {/each}
-      </svg>
+          {#each points as point, index (index)}
+            <circle
+              data-index={index}
+              class:origin={index === 0}
+              class:selected={index === selected}
+              cx={point[0]}
+              cy={point[1]}
+              r={markerRadius}
+            />
+            <text
+              class="number"
+              text-anchor={point[0] > width * 0.8 ? "end" : "start"}
+              x={point[0] +
+                (point[0] > width * 0.8 ? -1.4 : 1.4) * markerRadius}
+              y={point[1] < height * 0.1
+                ? point[1] + markerRadius * 3
+                : point[1] - markerRadius * 1.4}
+              font-size={fontSize}
+              >{index + 1} · {QUADRANT[index] ?? ""}{index === 0
+                ? " (origin)"
+                : ""}</text
+            >
+          {/each}
+        </svg>
+      </div>
     {:else if loadError}
       <p class="message">{loadError}</p>
     {:else}
@@ -662,14 +674,41 @@
 
 <style>
   .corners {
-    display: grid;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .help-toggle {
+    margin-left: 8px;
+    padding: 0 6px;
+    color: inherit;
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+
+  .frame {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
   }
 
   .instructions {
-    padding: 8px 12px;
-    color: var(--text);
-    background: var(--surface-2);
-    border-bottom: 1px solid var(--border);
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    max-height: 75%;
+    overflow: auto;
+    padding: 6px 10px;
+    color: #e3ebe6;
+    background: rgba(11, 15, 13, 0.85);
     font-size: 12px;
     line-height: 1.45;
   }
@@ -686,14 +725,20 @@
 
   .stage {
     position: relative;
-    background: #111713;
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    place-items: center;
+    background: #0b0f0d;
     user-select: none;
   }
 
   .stage img {
-    width: 100%;
-    height: auto;
     display: block;
+    max-width: 100%;
+    max-height: 64vh;
+    width: auto;
+    height: auto;
   }
 
   svg {
@@ -795,8 +840,8 @@
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
-    gap: 8px 12px;
-    padding: 8px 12px;
+    gap: 4px 10px;
+    padding: 4px 8px;
     font-size: 12px;
     border-top: 1px solid var(--border);
   }

@@ -54,6 +54,7 @@
   let error = $state<string | null>(null);
   let confirmRemove = $state(false);
   let svg = $state<SVGSVGElement>();
+  let showHelp = $state(false);
 
   let complete = $derived(lines.filter((line) => line.length >= MIN_POINTS));
   let tooShort = $derived(
@@ -331,72 +332,87 @@
   <div class="instructions">
     <p class="camera-label">
       <strong>{cameraLabel || `Camera ${camId}`}</strong> (cam {camId})
+      <button
+        class="help-toggle"
+        onclick={() => {
+          showHelp = !showHelp;
+        }}>{showHelp ? "hide help" : "help ?"}</button
+      >
     </p>
-    <p>
-      The camera lens bends straight lines, most of all near the picture edges.
-      Show it some lines that are straight in reality:
-      <strong>click 6–10 points along a straight mat seam or edge</strong>, then
-      press <em>Next line</em> (or Enter). Do 3–5 different seams, spread over
-      the picture — include some near the edges, where the bending is strongest.
-      Each line needs at least {MIN_POINTS} points; at least {MIN_LINES} lines. Esc
-      cancels.
+    <p class="lead">
+      <strong
+        >Click 6–10 points along a straight seam, Enter = next line; 3+ lines.</strong
+      >
     </p>
-    <ShortcutLegend />
+    {#if showHelp}
+      <p>
+        The camera lens bends straight lines, most of all near the picture
+        edges. Show it some lines that are straight in reality:
+        <strong>click 6–10 points along a straight mat seam or edge</strong>,
+        then press <em>Next line</em> (or Enter). Do 3–5 different seams, spread
+        over the picture — include some near the edges, where the bending is
+        strongest. Each line needs at least {MIN_POINTS} points; at least {MIN_LINES}
+        lines. Esc cancels.
+      </p>
+      <ShortcutLegend />
+    {/if}
   </div>
 
   <div class="stage">
     {#if imageUrl}
-      <img
-        src={imageUrl}
-        alt={`${cameraLabel || `Camera ${camId}`} raw snapshot for lens correction`}
-        onload={(event) => {
-          const image = event.currentTarget as HTMLImageElement;
-          width = image.naturalWidth || width;
-          height = image.naturalHeight || height;
-        }}
-      />
-      <svg
-        bind:this={svg}
-        viewBox={`0 0 ${String(width)} ${String(height)}`}
-        preserveAspectRatio="none"
-        role="application"
-        aria-label="Click points along straight edges"
-        onpointerdown={onPointerDown}
-        onpointermove={onPointerMove}
-        onpointerup={onPointerUp}
-        onpointercancel={onPointerUp}
-      >
-        {#each lines as line, index (index)}
-          {@const color = COLORS[index % COLORS.length] ?? "#ffd451"}
-          {#if line.length >= 2}
-            <polyline
-              class:short={line.length < MIN_POINTS}
-              stroke={color}
-              points={line.map((p) => p.join(",")).join(" ")}
-            />
-          {/if}
-          {#each line as point, pointIndex (pointIndex)}
-            <circle
-              data-line={index}
-              data-point={pointIndex}
-              class:selected={selected?.[0] === index &&
-                selected[1] === pointIndex}
-              cx={point[0]}
-              cy={point[1]}
-              r={radius}
-              fill={color}
-            />
+      <div class="frame">
+        <img
+          src={imageUrl}
+          alt={`${cameraLabel || `Camera ${camId}`} raw snapshot for lens correction`}
+          onload={(event) => {
+            const image = event.currentTarget as HTMLImageElement;
+            width = image.naturalWidth || width;
+            height = image.naturalHeight || height;
+          }}
+        />
+        <svg
+          bind:this={svg}
+          viewBox={`0 0 ${String(width)} ${String(height)}`}
+          preserveAspectRatio="none"
+          role="application"
+          aria-label="Click points along straight edges"
+          onpointerdown={onPointerDown}
+          onpointermove={onPointerMove}
+          onpointerup={onPointerUp}
+          onpointercancel={onPointerUp}
+        >
+          {#each lines as line, index (index)}
+            {@const color = COLORS[index % COLORS.length] ?? "#ffd451"}
+            {#if line.length >= 2}
+              <polyline
+                class:short={line.length < MIN_POINTS}
+                stroke={color}
+                points={line.map((p) => p.join(",")).join(" ")}
+              />
+            {/if}
+            {#each line as point, pointIndex (pointIndex)}
+              <circle
+                data-line={index}
+                data-point={pointIndex}
+                class:selected={selected?.[0] === index &&
+                  selected[1] === pointIndex}
+                cx={point[0]}
+                cy={point[1]}
+                r={radius}
+                fill={color}
+              />
+            {/each}
+            {#if line[0]}
+              <text
+                x={line[0][0] + radius * 1.5}
+                y={line[0][1] - radius * 1.5}
+                font-size={fontSize}
+                fill={color}>{index + 1}</text
+              >
+            {/if}
           {/each}
-          {#if line[0]}
-            <text
-              x={line[0][0] + radius * 1.5}
-              y={line[0][1] - radius * 1.5}
-              font-size={fontSize}
-              fill={color}>{index + 1}</text
-            >
-          {/if}
-        {/each}
-      </svg>
+        </svg>
+      </div>
     {:else if loadError}
       <p class="message">{loadError}</p>
     {:else}
@@ -478,14 +494,41 @@
 
 <style>
   .lens {
-    display: grid;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .help-toggle {
+    margin-left: 8px;
+    padding: 0 6px;
+    color: inherit;
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+
+  .frame {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
   }
 
   .instructions {
-    padding: 8px 12px;
-    color: var(--text);
-    background: var(--surface-2);
-    border-bottom: 1px solid var(--border);
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    max-height: 75%;
+    overflow: auto;
+    padding: 6px 10px;
+    color: #e3ebe6;
+    background: rgba(11, 15, 13, 0.85);
     font-size: 12px;
     line-height: 1.45;
   }
@@ -496,14 +539,20 @@
 
   .stage {
     position: relative;
-    background: #111713;
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    place-items: center;
+    background: #0b0f0d;
     user-select: none;
   }
 
   .stage img {
-    width: 100%;
-    height: auto;
     display: block;
+    max-width: 100%;
+    max-height: 64vh;
+    width: auto;
+    height: auto;
   }
 
   svg {
@@ -558,8 +607,8 @@
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
-    gap: 8px 12px;
-    padding: 8px 12px;
+    gap: 4px 10px;
+    padding: 4px 8px;
     font-size: 12px;
     border-top: 1px solid var(--border);
   }

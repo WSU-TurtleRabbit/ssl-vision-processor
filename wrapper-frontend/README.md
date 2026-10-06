@@ -49,122 +49,67 @@ npm run dev
 
 ## Architecture
 
-- `src/lib/wrapper-bus.ts` — single `WebSocket` client. Exposes
-  `connectionState` (Svelte store) and `topic<T>(name)` (returns a
-  store of the latest message). Subscribes to a topic lazily on first
-  reader, unsubscribes when the last reader goes away. Reconnects on
-  close with exponential backoff (1s → 30s).
-- `src/App.svelte` — operator UI: connection badge, snapshot viewer
-  (list from `GET /snapshots` every 5 s, image refreshed once per second
-  via a cache-busting `?t=<ms>` query) with a projected field-geometry
-  overlay (field from the saved corners, numbered corner markers, live
-  robots/balls at their image pixels, redrawn on every detection frame),
-  detection table, service status and the active config
-  (`GET /api/config`). Detections older than 1 s are dropped, and a state
-  line explains an empty table ("vision_processor not running" /
-  "running, not calibrated → set field corners" / "recalibrating..." /
-  "no detection frames" / "N robots, M balls (live)"). The calibration
-  state is polled from `GET /api/calibration` every second.
-- `src/lib/ServicesPanel.svelte` — services from `GET /api/health`: Pi
-  camera (only for an http(s) `camera.path`; online/offline, streaming,
-  client, size, fps), `vision_processor` (running/stopped, pid, managed vs
-  started by hand, uptime, restarts, last detection age; Start / Stop /
-  Restart via `POST /api/vision/*`, "Show log" polls `GET /api/vision/log`
-  every second), backend uptime, field calibration state. Response types
-  live in `src/lib/health.ts`.
-- `src/lib/FieldCorners.svelte` — "Set field corners" mode (field
-  calibration without field lines). Freezes one raw snapshot, collects 4
-  clicks (numbered markers, polygon preview, drag a marker to adjust,
-  Undo / Reset / Cancel, Esc cancels), maps CSS px to image px, renumbers
-  2..4 clockwise from corner 1 and checks convexity. "I click: outer edge
-  incl. boundary" (default; the derived field corners are drawn dashed,
-  same homography as the backend, lens distortion ignored) or "the field
-  corners directly". Sizes come from `GET /api/calibration` (the published
-  geometry). "Save corners" posts to `POST /api/calibration/corners`; the
-  viewer then shows "recalibrating..." until the backend has a calibration
-  again. Corners saved in the config are pre-filled.
-- `src/lib/LensCorrection.svelte` — "Lens correction" mode: click points
-  along straight seams/edges (Next line / Enter, Undo point, Delete line,
-  Clear all, Esc), >= 3 lines of >= 4 points, posts to
-  `/api/calibration/lens`; "Remove lens correction" sends DELETE. The overlay
-  draws the saved lines (purple) and the calibrated model's straight-line
-  reprojection (dashed); the viewer chip shows k2 and the principal point.
-- `src/lib/GeometryEditor.svelte` — field geometry editor with a live
-  preview (`/api/geometry`), "Recalibrate now" after a size change, and the
-  "Refine with field lines" switch (`/api/calibration/refinement`).
-- `src/lib/PerformancePanel.svelte` — per-camera rate / processing / network
-  latency / robots / balls from `/api/metrics` (sparkline of the rate) plus
-  this page's detection updates/s and WebSocket messages/s.
-- `src/lib/HelpView.svelte` — Help (`#/help/<doc>`), loaded lazily: renders
-  `/api/docs/<name>` with marked + DOMPurify, GitHub-style heading ids,
-  in-app doc links, copy buttons on code blocks, mermaid diagrams (mermaid is
-  a separate lazy chunk, themed light/dark). Navigation mirrors
-  `docs/README.md`. The red "🚨 Panic" header button opens `panic.md`.
-- `src/lib/editHistory.ts` + `ShortcutLegend.svelte` — undo/redo stack and
-  the shortcuts shared by the corners and lens modes: Ctrl+Z / Ctrl+Y
-  (Ctrl+Shift+Z), Enter (lens: next line; save when complete), Esc,
-  Backspace/Delete (remove last point), Shift+click (new line, lens),
-  Ctrl+click (delete nearest point), drag to move, arrow keys nudge the
-  selected point (Shift: 5 px). Shortcuts are ignored while typing in a
-  field; the legend is shown in both mode banners and in Help → Shortcuts.
-  Corners mode has an Orientation bar (Rotate 180°, choose the origin
-  corner, warning when field_length would map onto the short side) and the
-  overlay draws the +x/+y axes, "goal −x/+x" and the origin corner.
-- `src/lib/CameraScan.svelte` — "Scan for cameras..." (Services): lists
-  camstream Pis from `GET /api/cameras/scan`, "Use this camera" (with or
-  without a vision_processor restart), Restart/Open/Close for cameras with a
-  saved token, inline "Add token" (`POST /api/cameras/token`), and a range
-  override (`?subnet=`). The Pi camera row has Start capture (open + start
-  vision_processor), Stop capture (two-step: stop vision_processor + close)
-  and Restart camera. Help → Cameras explains it.
-- Field dimensions: "Edit field dimensions" opens `GeometryEditor` as a modal
-  (Esc cancels); "Save & exit" writes + publishes the geometry, triggers
-  `POST /api/calibration/recalibrate` and shows a toast.
-- Colours: the Reference column is editable (three numbers, Enter saves via
-  `POST /api/colors/save`, Esc reverts) next to Pick and Auto-calibrate.
-- `src/lib/overlay.ts` — the camera-image overlay (field outline/markings
-  through the published calibration incl. lens distortion, +x/+y axes,
-  "goal −x/+x", origin corner, saved corners labelled 1·−x −y … 4·+x −y,
-  lens lines, live robots/balls), shared by the operator page and the
-  pop-out window.
-- `src/lib/PopoutView.svelte` — `/popout?cam=0&view=raw` (header "Pop out"
-  opens it in its own window): only the camera image on a dark background
-  with view selector, overlay on/off, snapshot rate 1/2/5/10 Hz
-  (`POST /api/config/debug-interval`) and a "Raw Pi stream" link that is only
-  offered while vision_processor is stopped (the Pi has a single viewer).
-- `src/lib/LogDrawer.svelte` + `LogsView.svelte` — the log console: a
-  right-edge drawer (header "Logs" or the `key, 380 px, state remembered)
-with a merged live tail of`vision_processor.log`, `pi-camera-<host>.log`and`wrapper_backend.log`(source checkboxes, WARN amber / error red,
-pause, clear, copy, "open file");`#/logs/<file>`is the single-file tail
-view (auto-refresh 2 s, pause, copy, download via`?raw=1`) and shows the
-  folder on the Jetson. The Services Pi camera row has "Show log" and shows
-  the latest failed/error line of the Pi (current camera run only).
-- Header: the mode buttons (corners, lens, field dimensions) are icon-only
-  with tooltips (inline SVG in `Icon.svelte`); the connection badge reads
-  "Live data: connected / reconnecting… / disconnected"; FPS and Frame chips
-  explain what they measure in their tooltips.
-- `src/lib/CameraName.svelte` — camera name ("Camera <id>" when unset) with
-  inline rename (✎, Enter saves via `POST /api/camera/name`, Esc cancels);
-  shown in the header, the Services Pi row, Performance and the
-  corners/lens/colour modes.
-- Header: ⟳ Refresh (re-fetches everything, reconnects the WebSocket, shows
-  the time), theme Light/Dark/System (CSS variables in `App.svelte`, choice
-  remembered in `localStorage`), ? Help, 🚨 Panic. The Services Pi camera row
-  has a _Restart camera_ button (`POST /api/camera/restart`; disabled with a
-  tooltip when no token is configured).
-- Colours: "Auto-calibrate colours" (`/api/colors/auto`) with progress and the
-  saved/skipped result. Detections and Colours sit side by side on wide
-  screens.
-- `src/lib/ColorPanel.svelte` — colour calibration panel. Polls
-  `GET /api/colors` every second and shows learned vs reference colour
-  per blob class (values are brightness-free dRGB; the swatches are hue
-  previews, `clamp(128 + 2 * (d - 127.5))` per channel). "Save learned
-  colours as reference" (two-step confirm) posts `{"from": "learned"}` to
-  `POST /api/colors/save`. "Pick" samples the raw snapshot instead: click
-  the colour in the image, the browser averages RGB over a 3 px radius
-  (image pixels), converts it to dRGB with `kernel/resampling.cl`'s
-  integer formula and posts it on "Apply". Esc cancels.
-- `src/main.ts` — mounts `App` into `#app`.
+One page that fits 1280×720 without scrolling: a 44 px status strip (camera
+name with inline rename, ● live-data / vision + fps / Pi / calibrated /
+game-controller chips, fps · ms/frame · pkt/s with tooltips, Refresh, log
+console, Help, 🚨 Panic, Receipt, theme), the camera view on the left (icon
+mode buttons on the image, calibration chip, view strip raw · flat · gradient
+· blob beneath) and task tabs on the right (remembered in `localStorage`):
+
+- **Live** — detections (Team/ID · X · Y · Angle° · Conf, balls beneath,
+  image px as tooltip; keyed rows) and performance numbers + sparkline.
+- **Cameras** — one block per camera: name, Pi status and the latest Pi
+  error line (current camera run only), Start capture / Stop capture (two-step)
+  / Restart camera / Show log, "Raw stream ↗" (the direct Pi feed in a new tab,
+  only while vision_processor is stopped — the Pi allows one viewer), camera
+  input text, calibration state with the corners labelled 1·−x −y … 4·+x −y
+  and the lens k2·pp, Set corners / Lens / Recalibrate, solved camera model.
+- **Calibrate** — field geometry one-liner + "Edit…" (modal; Save & exit
+  publishes and recalibrates), orientation of the saved corners (Rotate 180°,
+  another corner → origin), colours (Auto-calibrate | manual: colour-picker
+  swatch or "r, g, b"/#rrggbb text in normal RGB, converted to dRGB on save,
+  stored dRGB shown as a hint, ↺ reset to the upstream default, Pick from the
+  image).
+- **System** — cameras summary with "Scan network…" (scan results, Use this
+  camera, token forms), processing: vision_processor (state, status line,
+  current-run warning, Start/Stop/Restart, log), wrapper backend (uptime, logs),
+  game controller (receiving on the referee multicast: stage, command, teams,
+  age; process running/pid).
+
+Full views: Help (`#/help/<doc>`, lazy chunk), Logs (`#/logs/<file>`), Receipt
+(`#/receipt`, printable black-on-white, "Download JSON" = `/api/receipt?download=1`,
+lazy chunk). The log console is a right-edge drawer (` key). Static config
+details (thresholds, network addresses) only appear in the receipt.
+
+Lightweight by design: one WebSocket; detection frames are applied at most once
+per animation frame; polling is 2 s for health/calibration/metrics, 3 s for
+the config, 5 s for the snapshot list, 1 s for the image and colours; keyed
+table rows; marked/DOMPurify/mermaid stay in lazy chunks.
+
+### Files
+
+- `src/App.svelte` — routing, theme, polling, derived state, status strip,
+  layout, modals, toast.
+- `src/lib/CameraView.svelte` — image + overlay canvas (sized to 16:9 inside
+  the stage), icon mode buttons, view strip; hosts the corners / lens modes
+  (their banner overlays the frozen snapshot; "help ?" expands the long text).
+- `src/lib/LiveTab.svelte`, `CamerasTab.svelte`, `CalibrateTab.svelte`,
+  `SystemTab.svelte` — the tabs described above.
+- `src/lib/overlay.ts` — the camera overlay (field outline/markings through
+  the published calibration incl. lens distortion, +x/+y axes, goal −x/+x,
+  origin corner, labelled corners, lens lines, live robots/balls).
+- `src/lib/FieldCorners.svelte` / `LensCorrection.svelte` + `editHistory.ts`
+  / `ShortcutLegend.svelte` — the point-editing modes with undo/redo and the
+  shortcuts (Ctrl+Z / Ctrl+Y, Enter, Esc, Backspace, Shift+click, Ctrl+click,
+  drag, arrows; ignored while typing). Corners mode has the orientation bar.
+- `src/lib/GeometryEditor.svelte` — field dimensions (modal) with live
+  preview and the "refine with field lines" switch.
+- `src/lib/ColorPanel.svelte` — colours (see Calibrate above).
+- `src/lib/CameraScan.svelte`, `CameraName.svelte`, `PerformancePanel.svelte`,
+  `LogDrawer.svelte`, `LogsView.svelte`, `HelpView.svelte`, `ReceiptView.svelte`,
+  `Icon.svelte` (inline SVG icons), `health.ts` (API types + helpers),
+  `wrapper-bus.ts` (the WebSocket client: `connectionState`, `topic()`,
+  `reconnect()`, `messageCount()`).
 
 The WS wire format mirrors `wrapper_backend/websocket.py`'s envelope:
 

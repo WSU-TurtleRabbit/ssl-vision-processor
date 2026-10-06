@@ -6,6 +6,9 @@ import asyncio
 import contextlib
 import json
 import os
+import subprocess
+from collections.abc import Callable
+from datetime import datetime
 import time
 from pathlib import Path
 from typing import Any
@@ -17,13 +20,30 @@ from yarl import URL
 
 from wrapper_backend.bus import Bus
 from wrapper_backend.camera import camera_name
-from wrapper_backend.logs import CameraLogPoller
+from wrapper_backend.colors import _read_colors_json
+from wrapper_backend.gamecontroller import GameController
+from wrapper_backend.logs import CameraLogPoller, tail
 from wrapper_backend.yamledit import YamlEditError, atomic_write, update_section
 from wrapper_backend.calibration import FieldCalibration, config_cam_id, read_config
 from wrapper_backend.supervisor import VisionSupervisor, scan_vision_processors
 
 PI_STATUS_TIMEOUT_S = 1.0
 PI_STATUS_CACHE_S = 1.5
+
+
+def _read_colors(img_dir: Path, cam_id: int) -> dict[str, Any] | None:
+    result = _read_colors_json(img_dir, cam_id)
+    if result is None:
+        return None
+    data = result[0]
+    return {
+        "learned": data.get("learned"),
+        "reference": data.get("reference"),
+        "forces": {
+            "reference_force": data.get("reference_force"),
+            "history_force": data.get("history_force"),
+        },
+    }
 
 
 def pi_status_url(camera_path: Any) -> str | None:
@@ -74,6 +94,9 @@ def register(
     calibration: FieldCalibration,
     logs_dir: Path | None = None,
     camera_log: CameraLogPoller | None = None,
+    game_controller: GameController | None = None,
+    metrics_snapshot: Callable[[], dict[str, Any]] | None = None,
+    repo_root: Path | None = None,
 ) -> None:
     started_at = time.monotonic()
     pi_cache: dict[str, Any] = {"at": 0.0, "url": None, "status": None}
@@ -187,7 +210,10 @@ def register(
             "running": True,
             "pid": os.getpid(),
             "uptime_s": uptime,
+            "logs_dir": str(logs_dir) if logs_dir is not None else None,
         }
+        if game_controller is not None:
+            services["game_controller"] = game_controller.status()
         services["field_calibration"] = {
             "running": calib["calibrated"],
             "pid": None,
@@ -239,7 +265,6 @@ def register(
         return web.FileResponse(path)
 
     http_app.router.add_get("/", index_handler)
-    http_app.router.add_get("/popout", index_handler)
 
     debug_lock = asyncio.Lock()
 
@@ -282,6 +307,133 @@ def register(
         return web.json_response({"interval_ms": value})
 
     http_app.router.add_post("/api/config/debug-interval", debug_interval_handler)
+
+    git_cache: dict[str, str | None] = {}
+
+    def git_commit() -> str | None:
+        if "commit" not in git_cache:
+            try:
+                out = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=repo_root or vision_config.parent,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                git_cache["commit"] = out.stdout.strip() or None
+            except (OSError, subprocess.SubprocessError):
+                git_cache["commit"] = None
+        return git_cache["commit"]
+
+    def log_tail(name: str, count: int = 20) -> list[str]:
+        if logs_dir is None:
+            return []
+        return tail(logs_dir / name, count)[0]
+
+    async def receipt_handler(request: web.Request) -> web.Response:
+        """``GET /api/receipt[?download=1]``: one JSON with everything."""
+        cam_id = config_cam_id(vision_config)
+        config = read_config(vision_config)
+        calib = calibration.status(cam_id)
+        calib_json = calib.get("calib_json") or {}
+        pi = await pi_camera_status(request.app)
+        vision = vision_status()
+        colours = _read_colors(img_dir, cam_id)
+        field = geometry_field()
+        device = next(
+            (
+                line.split("Using device:", 1)[1].strip()
+                for line in reversed(supervisor.log_lines())
+                if "Using device:" in line
+            ),
+            None,
+        )
+        pi_log = camera_log.file.name if camera_log and camera_log.file else None
+        receipt = {
+            "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "git_commit": git_commit(),
+            "vision_build": device,
+            "geometry": {"file": str(geometry_config), **field},
+            "cameras": [
+                {
+                    "cam_id": cam_id,
+                    "name": camera_name(vision_config),
+                    "path": (config.get("camera") or {}).get("path")
+                    if isinstance(config.get("camera"), dict)
+                    else None,
+                    "pi_status": pi,
+                    "calibration_state": calib["state"],
+                    "corners": calib.get("corners"),
+                    "outer_corners": calib.get("outer_corners"),
+                    "lens": {
+                        "k2": calib_json.get("distortion_k2"),
+                        "principal_point": calib_json.get("principal_point"),
+                        "lines": len(calib.get("distortion_lines") or []),
+                    },
+                    "solved_model": {
+                        "focal_length": calib_json.get("focal_length"),
+                        "position": calib_json.get("position"),
+                        "euler": calib_json.get("euler"),
+                    },
+                }
+            ],
+            "colours": colours,
+            "services": {
+                "vision_processor": {
+                    k: vision.get(k)
+                    for k in (
+                        "state",
+                        "running",
+                        "pid",
+                        "uptime_s",
+                        "last_status",
+                        "last_warning",
+                        "last_exit",
+                        "restarts",
+                    )
+                },
+                "wrapper_backend": {
+                    "uptime_s": round(time.monotonic() - started_at, 1),
+                    "logs_dir": str(logs_dir) if logs_dir else None,
+                },
+                "game_controller": game_controller.status()
+                if game_controller is not None
+                else None,
+            },
+            "errors": {
+                "vision": vision.get("last_warning"),
+                "pi": camera_log.last_error if camera_log else None,
+                "pi_last_line": camera_log.last_line if camera_log else None,
+            },
+            "performance": metrics_snapshot() if metrics_snapshot else {},
+            "log_tail": {
+                "vision": log_tail("vision_processor.log"),
+                "pi": log_tail(pi_log) if pi_log else [],
+                "backend": log_tail("wrapper_backend.log"),
+            },
+        }
+        headers = {}
+        if request.query.get("download") == "1":
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            headers["Content-Disposition"] = (
+                f'attachment; filename="vision-receipt-{stamp}.json"'
+            )
+        return web.json_response(receipt, headers=headers)
+
+    def geometry_field() -> dict[str, Any]:
+        try:
+            parsed = yaml.safe_load(geometry_config.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            return {}
+        field = parsed.get("field") if isinstance(parsed, dict) else None
+        lines = parsed.get("optional_field_lines") if isinstance(parsed, dict) else None
+        return {
+            "field": field if isinstance(field, dict) else {},
+            "optional_field_lines": lines if isinstance(lines, dict) else {},
+        }
+
+    http_app.router.add_get("/api/receipt", receipt_handler)
     http_app.router.add_get("/assets/{path:.+}", asset_handler)
     http_app.on_startup.append(start_watcher)
     http_app.on_cleanup.append(stop_watcher)

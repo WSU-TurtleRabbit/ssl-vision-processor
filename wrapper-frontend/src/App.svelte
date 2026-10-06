@@ -1,97 +1,44 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
+  import CalibrateTab from "./lib/CalibrateTab.svelte";
   import CameraName from "./lib/CameraName.svelte";
-  import ColorPanel from "./lib/ColorPanel.svelte";
-  import FieldCorners from "./lib/FieldCorners.svelte";
-  import LensCorrection from "./lib/LensCorrection.svelte";
+  import CameraView from "./lib/CameraView.svelte";
+  import CamerasTab from "./lib/CamerasTab.svelte";
   import GeometryEditor from "./lib/GeometryEditor.svelte";
-  import PerformancePanel from "./lib/PerformancePanel.svelte";
-  import ServicesPanel from "./lib/ServicesPanel.svelte";
-  import type { CalibrationStatus, HealthResponse } from "./lib/health";
-  import { drawOverlay } from "./lib/overlay";
   import Icon from "./lib/Icon.svelte";
+  import LiveTab from "./lib/LiveTab.svelte";
   import LogDrawer from "./lib/LogDrawer.svelte";
   import LogsView from "./lib/LogsView.svelte";
-  import PopoutView from "./lib/PopoutView.svelte";
-  import { connectionState, reconnect, topic } from "./lib/wrapper-bus";
+  import SystemTab from "./lib/SystemTab.svelte";
+  import type {
+    CalibrationStatus,
+    CameraMetrics,
+    ConfigResponse,
+    DetectionFrame,
+    GeometryData,
+    HealthResponse,
+    Snapshot,
+    WrapperPacket,
+  } from "./lib/health";
+  import { asRecord, num } from "./lib/health";
+  import type { OverlayState } from "./lib/overlay";
+  import {
+    connectionState,
+    messageCount,
+    reconnect,
+    topic,
+  } from "./lib/wrapper-bus";
 
-  type DataMap = Record<string, unknown>;
+  // Operator page: status strip, camera view (left), task tabs (right),
+  // side log console, modals. Help / Logs / Receipt are full views
+  // (#/help, #/logs, #/receipt); Help and Receipt are lazy chunks.
 
-  interface Snapshot {
-    cam_id: string;
-    view: string;
-  }
+  type Toast = { kind: "ok" | "error"; text: string } | null;
+  type Tab = "live" | "cameras" | "calibrate" | "system";
 
-  interface RobotDetection {
-    robot_id?: number;
-    confidence?: number;
-    x?: number;
-    y?: number;
-    orientation?: number;
-    pixel_x?: number;
-    pixel_y?: number;
-    height?: number;
-  }
-
-  interface BallDetection {
-    confidence?: number;
-    x?: number;
-    y?: number;
-    z?: number;
-    pixel_x?: number;
-    pixel_y?: number;
-  }
-
-  interface DetectionFrame {
-    frame_number?: number;
-    t_capture?: number;
-    t_sent?: number;
-    camera_id?: number;
-    balls?: BallDetection[];
-    robots_blue?: RobotDetection[];
-    robots_yellow?: RobotDetection[];
-  }
-
-  interface GeometryData {
-    field?: DataMap;
-    calib?: DataMap[];
-    models?: DataMap;
-  }
-
-  interface WrapperPacket {
-    detection?: DetectionFrame;
-    geometry?: GeometryData;
-    source?: string;
-  }
-
-  interface ConfigResponse {
-    path: string;
-    modified_at: number;
-    config: DataMap;
-  }
-
-  const wrapperPacket = topic<WrapperPacket>("wrapper_packet.out");
-  const detectionPacket = topic<DetectionFrame>("detection.in");
-  const preferredViews = [
-    "raw",
-    "flat",
-    "gradient",
-    "blob",
-    "pixels.corner",
-    "pixels.refined",
-    "lines",
-  ];
-
-  let snapshots = $state<Snapshot[]>([]);
-  let selectedView = $state("overlay");
-  let cacheBuster = $state(0);
-  let configPayload = $state<ConfigResponse | null>(null);
-  let health = $state<HealthResponse | null>(null);
-  let healthReachable = $state(false);
-  let calibration = $state<CalibrationStatus | null>(null);
-  // --- view routing: "#/help/<doc>[#anchor]" shows the Help view ---------
+  // --- routing ------------------------------------------------------------
   function parseHash(): {
-    view: "main" | "help" | "logs";
+    view: "main" | "help" | "logs" | "receipt";
     doc: string;
     file: string | null;
   } {
@@ -99,41 +46,84 @@
     if (help) return { view: "help", doc: help[1] ?? "README", file: null };
     const logs = /^#\/logs(?:\/([\w.-]+))?/.exec(location.hash);
     if (logs) return { view: "logs", doc: "README", file: logs[1] ?? null };
+    if (location.hash.startsWith("#/receipt"))
+      return { view: "receipt", doc: "README", file: null };
     return { view: "main", doc: "README", file: null };
   }
-  // /popout?cam=0&view=raw: the minimal pop-out camera window.
-  const isPopout =
-    location.pathname.endsWith("/popout") ||
-    location.hash.startsWith("#/popout");
-  function openLogs(file: string | null = null): void {
-    location.hash = `#/logs${file ? `/${file}` : ""}`;
+  let route = $state(parseHash());
+  function go(hash: string): void {
+    location.hash = hash;
     route = parseHash();
     window.scrollTo(0, 0);
   }
-  function popOut(): void {
-    window.open(
-      `/popout?cam=${String(camId)}&view=raw`,
-      "vp-popout",
-      "width=960,height=600,menubar=no,toolbar=no",
-    );
+  function openHelp(doc = "README", anchor?: string): void {
+    go(`#/help/${doc}${anchor ? `#${anchor}` : ""}`);
   }
-  // Log console drawer (right edge), remembered per browser.
-  const DRAWER_KEY = "vp-log-drawer";
-  function readDrawer(): boolean {
+  function openLogs(file: string | null = null): void {
+    go(`#/logs${file ? `/${file}` : ""}`);
+  }
+  function closeView(): void {
+    history.pushState(null, "", location.pathname + location.search);
+    route = parseHash();
+  }
+  let helpModule: Promise<typeof import("./lib/HelpView.svelte")> | null = null;
+  function loadHelp(): Promise<typeof import("./lib/HelpView.svelte")> {
+    helpModule ??= import("./lib/HelpView.svelte");
+    return helpModule;
+  }
+  let receiptModule: Promise<typeof import("./lib/ReceiptView.svelte")> | null =
+    null;
+  function loadReceipt(): Promise<typeof import("./lib/ReceiptView.svelte")> {
+    receiptModule ??= import("./lib/ReceiptView.svelte");
+    return receiptModule;
+  }
+
+  // --- remembered UI state (per browser, failures ignored) -----------------
+  function remember(key: string, value: string): void {
     try {
-      return localStorage.getItem(DRAWER_KEY) === "1";
+      localStorage.setItem(key, value);
     } catch {
-      return false;
+      // not remembered
     }
   }
-  let drawerOpen = $state(readDrawer());
+  function recall(key: string): string | null {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+  type ThemePref = "light" | "dark" | "system";
+  const stored = recall("vp-theme");
+  let themePref = $state<ThemePref>(
+    stored === "dark" || stored === "system" ? stored : "light",
+  );
+  let systemDark = $state(
+    window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
+  let dark = $derived(
+    themePref === "dark" || (themePref === "system" && systemDark),
+  );
+  $effect(() => {
+    document.documentElement.dataset["theme"] = dark ? "dark" : "light";
+    remember("vp-theme", themePref);
+  });
+  const storedTab = recall("vp-tab");
+  let tab = $state<Tab>(
+    storedTab === "cameras" ||
+      storedTab === "calibrate" ||
+      storedTab === "system"
+      ? storedTab
+      : "live",
+  );
+  function setTab(next: Tab): void {
+    tab = next;
+    remember("vp-tab", next);
+  }
+  let drawerOpen = $state(recall("vp-log-drawer") === "1");
   function toggleDrawer(): void {
     drawerOpen = !drawerOpen;
-    try {
-      localStorage.setItem(DRAWER_KEY, drawerOpen ? "1" : "0");
-    } catch {
-      // Not remembered.
-    }
+    remember("vp-log-drawer", drawerOpen ? "1" : "0");
   }
   function onGlobalKey(event: KeyboardEvent): void {
     if (event.key !== "`" || event.ctrlKey || event.metaKey || event.altKey)
@@ -148,78 +138,37 @@
     event.preventDefault();
     toggleDrawer();
   }
-  let route = $state(parseHash());
-  function openHelp(doc = "README", anchor?: string): void {
-    location.hash = `#/help/${doc}${anchor ? `#${anchor}` : ""}`;
-    route = parseHash();
-    if (!anchor) window.scrollTo(0, 0);
-  }
-  function closeHelp(): void {
-    history.pushState(null, "", location.pathname + location.search);
-    route = parseHash();
-  }
-  let helpModule: Promise<typeof import("./lib/HelpView.svelte")> | null = null;
-  function loadHelp(): Promise<typeof import("./lib/HelpView.svelte")> {
-    helpModule ??= import("./lib/HelpView.svelte");
-    return helpModule;
-  }
 
-  // --- theme: light (default) / dark / system, remembered per browser ----
-  type ThemePref = "light" | "dark" | "system";
-  const THEME_KEY = "vp-theme";
-  function readThemePref(): ThemePref {
-    try {
-      const stored = localStorage.getItem(THEME_KEY);
-      if (stored === "dark" || stored === "system") return stored;
-    } catch {
-      // Storage blocked: fall back to the default.
-    }
-    return "light";
-  }
-  let themePref = $state<ThemePref>(readThemePref());
-  let systemDark = $state(
-    window.matchMedia("(prefers-color-scheme: dark)").matches,
-  );
-  let dark = $derived(
-    themePref === "dark" || (themePref === "system" && systemDark),
-  );
-  $effect(() => {
-    document.documentElement.dataset["theme"] = dark ? "dark" : "light";
-    try {
-      localStorage.setItem(THEME_KEY, themePref);
-    } catch {
-      // Not remembered; still applied for this page.
-    }
-  });
+  // --- data ---------------------------------------------------------------
+  const wrapperPacket = topic<WrapperPacket>("wrapper_packet.out");
+  const detectionPacket = topic<DetectionFrame>("detection.in");
 
-  // --- manual refresh -----------------------------------------------------
+  let snapshots = $state<Snapshot[]>([]);
+  let selectedView = $state("raw");
+  let cacheBuster = $state(Date.now());
+  let configPayload = $state<ConfigResponse | null>(null);
+  let health = $state<HealthResponse | null>(null);
+  let healthReachable = $state(false);
+  let calibration = $state<CalibrationStatus | null>(null);
+  let metrics = $state<Record<string, CameraMetrics>>({});
+  let geometry = $state<GeometryData | null>(null);
+  let detection = $state<DetectionFrame | null>(null);
+  let lastFrameAt = $state(0);
+  let clock = $state(performance.now());
+  let fps = $state(0);
+  let uiFps = $state(0);
+  let wsRate = $state(0);
+  let uiFrames = 0;
   let refreshToken = $state(0);
   let lastUpdated = $state<Date | null>(null);
   let refreshing = $state(false);
-  async function refreshAll(): Promise<void> {
-    refreshing = true;
-    reconnect();
-    refreshToken += 1;
-    await Promise.all([
-      refreshSnapshots(),
-      refreshConfig(),
-      refreshHealth(),
-      refreshCalibration(),
-    ]);
-    cacheBuster = Date.now();
-    lastUpdated = new Date();
-    refreshing = false;
-  }
-  // Detection frames applied to the page (Performance panel).
-  let uiFrames = $state(0);
-
-  // Field dimensions modal + toast.
+  let cornersMode = $state(false);
+  let lensMode = $state(false);
   let geometryModal = $state(false);
-  let toast = $state<{ kind: "ok" | "error"; text: string } | null>(null);
+  let toast = $state<Toast>(null);
   let toastTimer: ReturnType<typeof setTimeout> | null = null;
-  function showToast(
-    next: { kind: "ok" | "error"; text: string } | null,
-  ): void {
+
+  function showToast(next: Toast): void {
     if (toastTimer) clearTimeout(toastTimer);
     toast = next;
     if (next)
@@ -227,38 +176,16 @@
         toast = null;
       }, 8000);
   }
-  let cornersMode = $state(false);
-  let lensMode = $state(false);
-  let cornersMessage = $state<string | null>(null);
-  let detection = $state<DetectionFrame | null>(null);
-  // performance.now() of the last detection frame, and a 250 ms clock so
-  // "live" turns false by itself when frames stop.
-  let lastFrameAt = $state(0);
-  let clock = $state(performance.now());
-  let geometry = $state<GeometryData | null>(null);
-  let fps = $state(0);
-  let previousFrame = 0;
-  let previousFrameAt = 0;
-  let overlayCanvas = $state<HTMLCanvasElement>();
 
   let activeConfig = $derived(asRecord(configPayload?.config));
-  let cameraConfig = $derived(asRecord(activeConfig["camera"]));
   let geometryConfig = $derived(asRecord(activeConfig["geometry"]));
-  let thresholdConfig = $derived(asRecord(activeConfig["thresholds"]));
-  let colorConfig = $derived(asRecord(activeConfig["color"]));
-  let networkConfig = $derived(asRecord(activeConfig["network"]));
-  let streamConfig = $derived(asRecord(activeConfig["stream"]));
   let field = $derived(asRecord(geometry?.field));
   let camId = $derived(health?.cam_id ?? 0);
   let cameraName = $derived(health?.camera_name ?? null);
   let cameraLabel = $derived(cameraName ?? `Camera ${String(camId)}`);
   let cameraCalibration = $derived(
-    geometry?.calib?.find(
-      (calib) => valueNumber(calib["camera_id"]) === camId,
-    ) ?? {},
+    geometry?.calib?.find((c) => Number(c["camera_id"] ?? 0) === camId) ?? {},
   );
-  // Detections older than this are dropped: nothing stays on screen when
-  // vision_processor stops sending.
   const DETECTION_STALE_MS = 1000;
   let detectionLive = $derived(
     lastFrameAt > 0 && clock - lastFrameAt <= DETECTION_STALE_MS,
@@ -273,70 +200,69 @@
   let calibrationState = $derived(
     calibration?.state ?? health?.services.field_calibration?.state,
   );
-  // "k2 0.23 · pp 380, 214" from the newest calib.json.
   let lensInfo = $derived.by(() => {
-    const calib = calibration?.calib_json;
-    if (!calib || calibrationState !== "calibrated") return null;
-    const k2 = valueNumber(calib.distortion_k2, Number.NaN);
-    const pp = Array.isArray(calib.principal_point)
-      ? calib.principal_point
-      : [];
-    if (!Number.isFinite(k2)) return null;
-    return `k2 ${k2.toFixed(3)} · pp ${number(pp[0])}, ${number(pp[1])}${
-      Array.isArray(calibration?.distortion_lines)
-        ? ` · ${String(calibration.distortion_lines.length)} lens lines`
-        : ""
-    }`;
+    const cj = calibration?.calib_json;
+    if (!cj || calibrationState !== "calibrated") return null;
+    const k2 = cj.distortion_k2;
+    if (typeof k2 !== "number") return null;
+    const pp = cj.principal_point ?? [];
+    return `k2 ${k2.toFixed(3)} · pp ${num(pp[0])}, ${num(pp[1])}`;
   });
-
   let detectionState = $derived.by(() => {
     if (detectionLive) {
       const robots = blueRobots.length + yellowRobots.length;
-      return {
-        kind: "live",
-        text: `${String(robots)} robot${robots === 1 ? "" : "s"}, ${String(balls.length)} ball${balls.length === 1 ? "" : "s"} (live)`,
-      };
+      return `${String(robots)} robot${robots === 1 ? "" : "s"}, ${String(balls.length)} ball${balls.length === 1 ? "" : "s"} (live)`;
     }
-    if (!visionRunning)
-      return { kind: "down", text: "vision_processor not running" };
-    if (calibrationState === "recalibrating")
-      return { kind: "wait", text: "running, recalibrating..." };
+    if (!visionRunning) return "vision_processor not running";
+    if (calibrationState === "recalibrating") return "running, recalibrating…";
     if (calibrationState === "not_calibrated")
-      return {
-        kind: "wait",
-        text: "running, not calibrated → set field corners",
-      };
-    return { kind: "down", text: "running, but no detection frames" };
+      return "running, not calibrated → set field corners";
+    return "running, no detection frames";
   });
+  let overlay = $derived<OverlayState>({
+    calib: cameraCalibration,
+    field,
+    geometryConfig,
+    robotsBlue: blueRobots,
+    robotsYellow: yellowRobots,
+    balls,
+  });
+  let camMetrics = $derived(metrics[String(camId)]);
+  let pi = $derived(health?.services.pi_camera);
+  let gc = $derived(health?.services.game_controller);
 
   $effect(() => {
     const packet = $wrapperPacket;
     if (packet?.geometry) geometry = packet.geometry;
   });
 
+  // Detection frames are applied at most once per animation frame.
+  let pendingFrame: DetectionFrame | null = null;
+  let rafId = 0;
   $effect(() => {
     const frame = $detectionPacket;
-    if (frame) {
-      detection = frame;
+    if (!frame) return;
+    pendingFrame = frame;
+    untrack(() => {
       lastFrameAt = performance.now();
-      // untrack: reading uiFrames here must not re-trigger this effect.
-      untrack(() => (uiFrames += 1));
-    }
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        if (pendingFrame) {
+          detection = pendingFrame;
+          uiFrames += 1;
+        }
+      });
+    });
   });
 
-  $effect(() => {
-    if (!detectionLive) {
-      fps = 0;
-      previousFrameAt = 0;
-    }
-  });
-
+  // vision_processor frame rate from frame numbers over >= 1 s windows.
+  let previousFrame = 0;
+  let previousFrameAt = 0;
   $effect(() => {
     const frame = detection?.frame_number ?? 0;
     if (!frame || frame === previousFrame) return;
     const now = performance.now();
-    // Frame-number rate over >= 1 s windows (robust against bursts of
-    // WebSocket messages); restart the window when numbering restarts.
     if (frame < previousFrame || previousFrameAt === 0) {
       previousFrame = frame;
       previousFrameAt = now;
@@ -348,150 +274,92 @@
     previousFrame = frame;
     previousFrameAt = now;
   });
+  $effect(() => {
+    if (!detectionLive) fps = 0;
+  });
 
-  function asRecord(value: unknown): DataMap {
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as DataMap)
-      : {};
+  async function getJson<T>(url: string): Promise<T | null> {
+    const response = await fetch(url);
+    return response.ok ? ((await response.json()) as T) : null;
   }
-
-  function number(value: unknown, digits = 0): string {
-    const parsed = typeof value === "number" ? value : Number(value);
-    return Number.isFinite(parsed) ? parsed.toFixed(digits) : "--";
-  }
-
-  function text(value: unknown): string {
-    if (value === null || value === undefined || value === "") return "--";
-    if (typeof value === "string") return value;
-    if (
-      typeof value === "number" ||
-      typeof value === "boolean" ||
-      typeof value === "bigint"
-    ) {
-      return String(value);
-    }
-    // Objects/arrays: show their contents rather than "[object Object]".
-    return typeof value === "object" ? JSON.stringify(value) : "--";
-  }
-
-  function valueNumber(value: unknown, fallback = 0): number {
-    const parsed = typeof value === "number" ? value : Number(value);
-    return Number.isFinite(parsed) ? parsed : fallback;
-  }
-
-  function drawFieldOverlay(): void {
-    if (!overlayCanvas || selectedView !== "overlay") return;
-    drawOverlay(overlayCanvas, {
-      calib: cameraCalibration,
-      field,
-      geometryConfig,
-      robotsBlue: blueRobots,
-      robotsYellow: yellowRobots,
-      balls,
-    });
-  }
-
-  function viewLabel(view: string): string {
-    const labels: Record<string, string> = {
-      raw: "Raw",
-      flat: "Color delta",
-      gradient: "Gradient",
-      blob: "Blob score",
-      "pixels.corner": "Corner model",
-      "pixels.refined": "Refined model",
-      lines: "Detected lines",
-    };
-    return labels[view] ?? view.replaceAll(".", " ");
-  }
-
-  function orderedSnapshots(): Snapshot[] {
-    return [...snapshots].sort((left, right) => {
-      const leftIndex = preferredViews.indexOf(left.view);
-      const rightIndex = preferredViews.indexOf(right.view);
-      const a = leftIndex === -1 ? preferredViews.length : leftIndex;
-      const b = rightIndex === -1 ? preferredViews.length : rightIndex;
-      return a - b || left.view.localeCompare(right.view);
-    });
-  }
-
-  function selectedSnapshot(): Snapshot | undefined {
-    return snapshots.find((snapshot) => snapshot.view === selectedView);
-  }
-
-  // Template-side views of the snapshot list, so `{#if}` can narrow them.
-  let rawSnapshot = $derived(
-    snapshots.find((snapshot) => snapshot.view === "raw"),
-  );
-  let currentSnapshot = $derived(
-    snapshots.find((snapshot) => snapshot.view === selectedView),
-  );
-
   async function refreshSnapshots(): Promise<void> {
     try {
-      const response = await fetch("/snapshots");
-      if (!response.ok) return;
-      snapshots = (await response.json()) as Snapshot[];
-      if (
-        selectedView !== "overlay" &&
-        !selectedSnapshot() &&
-        snapshots.length > 0
-      ) {
-        selectedView =
-          snapshots.find((item) => item.view === "raw")?.view ??
-          snapshots[0]?.view ??
-          "raw";
-      }
+      const list = await getJson<Snapshot[]>("/snapshots");
+      if (list) snapshots = list;
     } catch {
-      // The health indicator communicates backend availability.
+      // the strip shows reachability
     }
   }
-
   async function refreshConfig(): Promise<void> {
     try {
-      const response = await fetch("/api/config");
-      if (response.ok)
-        configPayload = (await response.json()) as ConfigResponse;
+      configPayload =
+        (await getJson<ConfigResponse>("/api/config")) ?? configPayload;
     } catch {
-      configPayload = null;
+      // keep the last config
     }
   }
-
   async function refreshHealth(): Promise<void> {
     try {
-      const response = await fetch("/api/health");
-      healthReachable = response.ok;
-      if (response.ok) health = (await response.json()) as HealthResponse;
+      const next = await getJson<HealthResponse>("/api/health");
+      healthReachable = next !== null;
+      if (next) health = next;
     } catch {
       healthReachable = false;
     }
   }
-
   async function refreshCalibration(): Promise<void> {
     try {
-      const response = await fetch(`/api/calibration?cam_id=${String(camId)}`);
-      if (response.ok)
-        calibration = (await response.json()) as CalibrationStatus;
+      calibration =
+        (await getJson<CalibrationStatus>(
+          `/api/calibration?cam_id=${String(camId)}`,
+        )) ?? calibration;
     } catch {
-      // Shown through the services panel.
+      // shown in the strip
     }
   }
-
-  function cornersSaved(message: string): void {
-    cornersMode = false;
-    lensMode = false;
-    cornersMessage = message;
-    void refreshCalibration();
-    void refreshConfig();
-    void refreshHealth();
+  async function refreshMetrics(): Promise<void> {
+    try {
+      const data = await getJson<{ cameras?: Record<string, CameraMetrics> }>(
+        "/api/metrics",
+      );
+      if (data) metrics = data.cameras ?? {};
+    } catch {
+      // shown in the strip
+    }
   }
-
-  onMount(() => {
-    void Promise.all([
+  function refreshEverything(): Promise<unknown> {
+    return Promise.all([
       refreshSnapshots(),
       refreshConfig(),
       refreshHealth(),
       refreshCalibration(),
-    ]).then(() => {
+      refreshMetrics(),
+    ]);
+  }
+  async function refreshAll(): Promise<void> {
+    refreshing = true;
+    reconnect();
+    refreshToken += 1;
+    await refreshEverything();
+    cacheBuster = Date.now();
+    lastUpdated = new Date();
+    refreshing = false;
+  }
+  function onChange(): void {
+    void refreshHealth();
+    void refreshCalibration();
+    void refreshConfig();
+    refreshToken += 1;
+  }
+  function modeSaved(message: string): void {
+    cornersMode = false;
+    lensMode = false;
+    showToast({ kind: "ok", text: message });
+    onChange();
+  }
+
+  onMount(() => {
+    void refreshEverything().then(() => {
       lastUpdated = new Date();
     });
     const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -504,703 +372,362 @@
     };
     window.addEventListener("hashchange", onHash);
     window.addEventListener("popstate", onHash);
-    const calibrationTimer = setInterval(() => void refreshCalibration(), 1000);
-    const clockTimer = setInterval(() => {
-      clock = performance.now();
-    }, 250);
-    const snapshotListTimer = setInterval(() => void refreshSnapshots(), 5000);
-    const configTimer = setInterval(() => void refreshConfig(), 3000);
-    const healthTimer = setInterval(() => void refreshHealth(), 2000);
-    const imageTimer = setInterval(() => {
-      cacheBuster = Date.now();
-    }, 100);
+    let lastUi = 0;
+    let lastWs = messageCount();
+    const timers = [
+      setInterval(() => void refreshSnapshots(), 5000),
+      setInterval(() => void refreshConfig(), 3000),
+      setInterval(() => void refreshHealth(), 2000),
+      setInterval(() => void refreshCalibration(), 2000),
+      setInterval(() => void refreshMetrics(), 2000),
+      setInterval(() => {
+        cacheBuster = Date.now();
+      }, 1000),
+      setInterval(() => {
+        clock = performance.now();
+      }, 250),
+      setInterval(() => {
+        uiFps = uiFrames - lastUi;
+        lastUi = uiFrames;
+        const ws = messageCount();
+        wsRate = ws - lastWs;
+        lastWs = ws;
+      }, 1000),
+    ];
     return () => {
-      clearInterval(snapshotListTimer);
-      clearInterval(configTimer);
-      clearInterval(healthTimer);
-      clearInterval(imageTimer);
-      clearInterval(calibrationTimer);
-      clearInterval(clockTimer);
+      for (const timer of timers) clearInterval(timer);
       darkQuery.removeEventListener("change", onSystemTheme);
       window.removeEventListener("hashchange", onHash);
       window.removeEventListener("popstate", onHash);
     };
   });
 
-  $effect(() => {
-    // Redraw on every new frame or geometry update.
-    void cacheBuster;
-    void geometry;
-    void liveDetection;
-    if (selectedView === "overlay") requestAnimationFrame(drawFieldOverlay);
-  });
+  function piText(): string {
+    if (!pi) return "no network camera";
+    if (!pi.running) return "Pi offline";
+    if (pi.closed) return "Pi closed";
+    return pi.streaming ? "Pi streaming" : "Pi idle";
+  }
 </script>
 
 <svelte:window onkeydown={onGlobalKey} />
 
 <svelte:head>
-  <title>SSL Vision Operator</title>
+  <title>{cameraLabel} · SSL Vision</title>
 </svelte:head>
 
-{#if isPopout}
-  <PopoutView />
-{:else}
-  <main>
-    <header class="topbar">
-      <div class="identity">
-        <span class="product-mark">VP</span>
-        <div>
-          <h1>SSL Vision Operator</h1>
-          <p>
-            <CameraName
-              {camId}
-              name={cameraName}
-              showId
-              onrenamed={() => void refreshHealth()}
-            />
-            · {number(field["field_length"])} × {number(field["field_width"])} mm
-            field
-          </p>
-        </div>
-      </div>
-      <div class="header-status">
-        <span
-          class:healthy={$connectionState === "open"}
-          class="status-badge"
-          title="WebSocket to the backend on :8765 (detections, geometry, colours)"
-        >
-          <span class="status-dot"></span>
-          Live data: {$connectionState === "open"
-            ? "connected"
-            : $connectionState === "connecting"
-              ? "reconnecting…"
-              : "disconnected"}
-        </span>
-        <span
-          class="metric"
-          title="Detection frames per second reaching this page from vision_processor (camera fps is shown in Performance)"
-          ><strong>{number(fps, 1)}</strong> FPS</span
-        >
-        <span
-          class="metric"
-          title="Frame number of the latest detection packet from vision_processor"
-          ><strong>{number(detection?.frame_number)}</strong> Frame</span
-        >
-        <button
-          class="header-button"
-          title="Pop out the camera view into its own window"
-          aria-label="Pop out the camera view"
-          onclick={popOut}><Icon name="popout" size={14} /> Pop out</button
-        >
-        <button
-          class="header-button"
-          class:active={drawerOpen}
-          title="Log console (` key)"
-          aria-label="Toggle the log console"
-          onclick={toggleDrawer}><Icon name="logs" size={14} /> Logs</button
-        >
-        <button
-          class="header-button"
-          disabled={refreshing}
-          title="Re-fetch everything and reconnect the WebSocket"
-          onclick={refreshAll}
-          >⟳ Refresh{lastUpdated
-            ? ` · ${lastUpdated.toLocaleTimeString()}`
-            : ""}</button
-        >
-        <select
-          class="header-button"
-          bind:value={themePref}
-          aria-label="Colour theme"
-          title="Colour theme"
-        >
-          <option value="light">☀ Light</option>
-          <option value="dark">☾ Dark</option>
-          <option value="system">◐ System</option>
-        </select>
-        {#if route.view !== "main"}
-          <button class="header-button" onclick={closeHelp}>← Operator</button>
-        {:else}
-          <button
-            class="header-button"
-            onclick={() => {
-              openHelp();
-            }}>? Help</button
-          >
-        {/if}
-        <button
-          class="panic-button"
-          onclick={() => {
-            openHelp("panic");
-          }}>🚨 Panic</button
-        >
-      </div>
-    </header>
-
-    {#if route.view === "logs"}
-      <LogsView file={route.file} onopen={openLogs} />
-    {:else if route.view === "help"}
-      {#await loadHelp()}
-        <p class="help-loading">Loading help...</p>
-      {:then module}
-        <module.default name={route.doc} {dark} onnavigate={openHelp} />
-      {:catch error}
-        <p class="help-loading">Help failed to load: {String(error)}</p>
-      {/await}
-    {:else}
-      <div class="workspace">
-        <div class="primary-column">
-          <section class="viewer-panel">
-            <div class="section-heading">
-              <div>
-                <h2>Processing view</h2>
-                <p>Live diagnostic snapshots from the active processor</p>
-              </div>
-              <div class="viewer-actions">
-                <span
-                  class="small-state"
-                  class:ok={calibrationState === "calibrated"}
-                  class:warn={calibrationState !== "calibrated"}
-                >
-                  {calibrationState === "calibrated"
-                    ? "calibrated"
-                    : calibrationState === "recalibrating"
-                      ? "recalibrating..."
-                      : "not calibrated"}
-                </span>
-                <span class="small-state"
-                  >{health?.latest_snapshot_age_s ?? "--"} s ago</span
-                >
-                {#if lensInfo}
-                  <span
-                    class="small-state"
-                    title="Lens distortion k2 and principal point from the last calibration (calib.json)"
-                    >{lensInfo}</span
-                  >
-                {/if}
-                <button
-                  class="corners-button icon"
-                  class:active={lensMode}
-                  title={lensMode
-                    ? "Cancel lens correction (Esc)"
-                    : "Lens correction: click points along straight edges"}
-                  aria-label={lensMode
-                    ? "Cancel lens correction"
-                    : "Lens correction"}
-                  onclick={() => {
-                    lensMode = !lensMode;
-                    cornersMode = false;
-                    cornersMessage = null;
-                  }}><Icon name="lens" /></button
-                >
-                <button
-                  class="corners-button icon"
-                  class:active={cornersMode}
-                  title={cornersMode
-                    ? "Cancel field corners (Esc)"
-                    : "Set field corners: click the 4 corners (Enter saves, Esc cancels)"}
-                  aria-label={cornersMode
-                    ? "Cancel field corners"
-                    : "Set field corners"}
-                  onclick={() => {
-                    cornersMode = !cornersMode;
-                    lensMode = false;
-                    cornersMessage = null;
-                  }}><Icon name="corners" /></button
-                >
-                <button
-                  class="corners-button icon"
-                  title="Edit field dimensions (modal; Esc cancels)"
-                  aria-label="Edit field dimensions"
-                  onclick={() => (geometryModal = true)}
-                  ><Icon name="field" /></button
-                >
-              </div>
-            </div>
-
-            {#if cornersMessage}
-              <p class="corners-message">
-                {cornersMessage}
-                {#if calibrationState === "recalibrating"}
-                  Waiting for the new calibration...
-                {:else if calibrationState === "calibrated"}
-                  Calibrated — the overlay shows the field from the new
-                  calibration{lensInfo ? ` (${lensInfo})` : ""}.
-                {/if}
-                <button onclick={() => (cornersMessage = null)}>Dismiss</button>
-              </p>
-            {/if}
-
-            {#if lensMode}
-              <LensCorrection
-                {cameraLabel}
-                camId={String(camId)}
-                savedLines={calibration?.distortion_lines ??
-                  geometryConfig["distortion_lines"]}
-                oncancel={() => (lensMode = false)}
-                onsaved={cornersSaved}
-              />
-            {:else if cornersMode}
-              <FieldCorners
-                {cameraLabel}
-                camId={String(camId)}
-                savedCorners={calibration?.corners ??
-                  geometryConfig["line_corners"]}
-                savedOuter={calibration?.outer_corners ??
-                  geometryConfig["outer_line_corners"]}
-                fieldLength={calibration?.field_length ??
-                  valueNumber(field["field_length"])}
-                fieldWidth={calibration?.field_width ??
-                  valueNumber(field["field_width"])}
-                boundaryWidth={calibration?.boundary_width ??
-                  valueNumber(field["boundary_width"])}
-                boundaryGoalLine={calibration?.boundary_width_goal_line ??
-                  valueNumber(
-                    field["boundary_width_goal_line"] ??
-                      field["boundary_width"],
-                  )}
-                oncancel={() => (cornersMode = false)}
-                onsaved={cornersSaved}
-              />
-            {:else}
-              <nav class="view-tabs" aria-label="Diagnostic view">
-                <button
-                  class:active={selectedView === "overlay"}
-                  onclick={() => (selectedView = "overlay")}
-                >
-                  Field overlay
-                </button>
-                {#each orderedSnapshots() as snapshot (`${snapshot.cam_id}.${snapshot.view}`)}
-                  <button
-                    class:active={snapshot.view === selectedView}
-                    onclick={() => (selectedView = snapshot.view)}
-                  >
-                    {viewLabel(snapshot.view)}
-                  </button>
-                {/each}
-              </nav>
-
-              <div class="image-stage">
-                {#if selectedView === "overlay" && rawSnapshot}
-                  <div class="overlay-stage">
-                    <img
-                      src={`/snapshot/${rawSnapshot.cam_id}/raw?t=${String(cacheBuster)}`}
-                      alt="Camera field geometry overlay"
-                      onload={drawFieldOverlay}
-                    />
-                    <canvas
-                      bind:this={overlayCanvas}
-                      aria-label="Projected field and goal geometry"
-                    ></canvas>
-                    <div class="overlay-legend">
-                      <span class="field-key">Field</span>
-                      <span class="goal-key">Goals</span>
-                      <span class="marking-key">Markings</span>
-                      <span class="boundary-key">Boundary</span>
-                      <span class="corner-key">Outer points</span>
-                    </div>
-                  </div>
-                {:else if currentSnapshot}
-                  <img
-                    src={`/snapshot/${currentSnapshot.cam_id}/${selectedView}?t=${String(cacheBuster)}`}
-                    alt={`Camera ${currentSnapshot.cam_id} ${viewLabel(selectedView)}`}
-                  />
-                {:else}
-                  <p>No processor snapshots are available.</p>
-                {/if}
-              </div>
-            {/if}
-          </section>
-
-          <div class="panel-row">
-            <section class="detections-panel">
-              <div class="section-heading compact">
-                <div>
-                  <h2>Detections</h2>
-                  <p class={`detection-state ${detectionState.kind}`}>
-                    {detectionState.text}
-                  </p>
-                </div>
-                <div class="detection-counts">
-                  <span class="blue-count">{blueRobots.length} blue</span>
-                  <span class="yellow-count">{yellowRobots.length} yellow</span>
-                  <span>{balls.length} balls</span>
-                </div>
-              </div>
-
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Object</th>
-                      <th>ID</th>
-                      <th>Confidence</th>
-                      <th>X mm</th>
-                      <th>Y mm</th>
-                      <th>Angle rad</th>
-                      <th>Image px</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {#each blueRobots as robot, index (`blue-${String(index)}-${String(robot.robot_id)}`)}
-                      <tr>
-                        <td><span class="team-dot blue"></span>Blue robot</td>
-                        <td>{text(robot.robot_id)}</td>
-                        <td>{number(robot.confidence, 2)}</td>
-                        <td>{number(robot.x, 1)}</td>
-                        <td>{number(robot.y, 1)}</td>
-                        <td>{number(robot.orientation, 3)}</td>
-                        <td
-                          >{number(robot.pixel_x, 1)}, {number(
-                            robot.pixel_y,
-                            1,
-                          )}</td
-                        >
-                      </tr>
-                    {/each}
-                    {#each yellowRobots as robot, index (`yellow-${String(index)}-${String(robot.robot_id)}`)}
-                      <tr>
-                        <td
-                          ><span class="team-dot yellow"></span>Yellow robot</td
-                        >
-                        <td>{text(robot.robot_id)}</td>
-                        <td>{number(robot.confidence, 2)}</td>
-                        <td>{number(robot.x, 1)}</td>
-                        <td>{number(robot.y, 1)}</td>
-                        <td>{number(robot.orientation, 3)}</td>
-                        <td
-                          >{number(robot.pixel_x, 1)}, {number(
-                            robot.pixel_y,
-                            1,
-                          )}</td
-                        >
-                      </tr>
-                    {/each}
-                    {#each balls as ball, index (`ball-${String(index)}`)}
-                      <tr>
-                        <td><span class="team-dot orange"></span>Ball</td>
-                        <td>--</td>
-                        <td>{number(ball.confidence, 2)}</td>
-                        <td>{number(ball.x, 1)}</td>
-                        <td>{number(ball.y, 1)}</td>
-                        <td>--</td>
-                        <td
-                          >{number(ball.pixel_x, 1)}, {number(
-                            ball.pixel_y,
-                            1,
-                          )}</td
-                        >
-                      </tr>
-                    {/each}
-                    {#if blueRobots.length + yellowRobots.length + balls.length === 0}
-                      <tr
-                        ><td colspan="7" class="empty-row"
-                          >{detectionLive
-                            ? "No objects in the latest frame"
-                            : detectionState.text}</td
-                        ></tr
-                      >
-                    {/if}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <ColorPanel
-              {cameraLabel}
-              camId={rawSnapshot?.cam_id ?? "0"}
-              configColors={colorConfig}
-              {refreshToken}
-            />
-          </div>
-        </div>
-
-        <aside class="inspector">
-          <ServicesPanel
-            services={health?.services ?? null}
-            reachable={healthReachable}
-            onchange={() => void refreshHealth()}
-          />
-
-          <section>
-            <div class="section-heading compact">
-              <h2>Camera input</h2>
-              <span class="section-tag">Active config</span>
-            </div>
-            <dl class="property-grid">
-              <div>
-                <dt>Device</dt>
-                <dd>{text(cameraConfig["path"])}</dd>
-              </div>
-              <div>
-                <dt>Capture</dt>
-                <dd>
-                  {number(cameraConfig["width"])} x {number(
-                    cameraConfig["height"],
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Processing</dt>
-                <dd>
-                  {number(cameraConfig["output_width"])} x {number(
-                    cameraConfig["output_height"],
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Capture rate</dt>
-                <dd>{number(cameraConfig["fps"])} FPS</dd>
-              </div>
-              <div>
-                <dt>Gain</dt>
-                <dd>{number(cameraConfig["gain"], 1)}</dd>
-              </div>
-              <div>
-                <dt>Gamma</dt>
-                <dd>{number(cameraConfig["gamma"], 1)}</dd>
-              </div>
-              <div>
-                <dt>Format</dt>
-                <dd>{text(cameraConfig["fourcc"])}</dd>
-              </div>
-              <div>
-                <dt>Left crop</dt>
-                <dd>{text(cameraConfig["crop_left_half"])}</dd>
-              </div>
-            </dl>
-          </section>
-
-          <section>
-            <div class="section-heading compact">
-              <h2>Solved camera model</h2>
-            </div>
-            <dl class="property-grid">
-              <div>
-                <dt>Focal length</dt>
-                <dd>{number(cameraCalibration["focal_length"], 2)}</dd>
-              </div>
-              <div>
-                <dt>Principal point</dt>
-                <dd>
-                  {number(cameraCalibration["principal_point_x"], 1)}, {number(
-                    cameraCalibration["principal_point_y"],
-                    1,
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Image size</dt>
-                <dd>
-                  {number(cameraCalibration["pixel_image_width"])} x {number(
-                    cameraCalibration["pixel_image_height"],
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Distortion</dt>
-                <dd>{number(cameraCalibration["distortion"], 4)}</dd>
-              </div>
-              <div>
-                <dt>Camera height</dt>
-                <dd>{number(geometryConfig["camera_height"], 0)} mm</dd>
-              </div>
-              <div>
-                <dt>Translation</dt>
-                <dd>
-                  {number(cameraCalibration["tx"], 0)}, {number(
-                    cameraCalibration["ty"],
-                    0,
-                  )}, {number(cameraCalibration["tz"], 0)}
-                </dd>
-              </div>
-            </dl>
-            <div class="corner-list">
-              <span>Field corners px</span>
-              <code>{JSON.stringify(geometryConfig["line_corners"] ?? [])}</code
-              >
-            </div>
-          </section>
-
-          <GeometryEditor
-            {camId}
-            refinement={calibration?.refinement === true}
-            {refreshToken}
-            onedit={() => (geometryModal = true)}
-            onchange={() => {
-              void refreshCalibration();
-              void refreshHealth();
-            }}
-          />
-
-          <PerformancePanel
-            {uiFrames}
-            names={{ [String(camId)]: cameraLabel }}
-          />
-
-          <section>
-            <div class="section-heading compact">
-              <h2>Detection thresholds</h2>
-            </div>
-            <dl class="property-grid thresholds">
-              <div>
-                <dt>Circularity</dt>
-                <dd>{number(thresholdConfig["circularity"], 1)}</dd>
-              </div>
-              <div>
-                <dt>Score</dt>
-                <dd>{number(thresholdConfig["score"], 1)}</dd>
-              </div>
-              <div>
-                <dt>Confidence</dt>
-                <dd>{number(thresholdConfig["min_confidence"], 2)}</dd>
-              </div>
-              <div>
-                <dt>Blob limit</dt>
-                <dd>{number(thresholdConfig["blobs"])}</dd>
-              </div>
-              <div>
-                <dt>Edge distance</dt>
-                <dd>{number(thresholdConfig["min_cam_edge_distance"])}</dd>
-              </div>
-              <div>
-                <dt>Clipping</dt>
-                <dd>{number(thresholdConfig["clipping_tolerance"], 1)}</dd>
-              </div>
-            </dl>
-          </section>
-
-          <section>
-            <div class="section-heading compact"><h2>Network output</h2></div>
-            <dl class="property-grid">
-              <div>
-                <dt>Vision multicast</dt>
-                <dd>
-                  {text(networkConfig["vision_ip"])}:{number(
-                    networkConfig["vision_port"],
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Game Controller</dt>
-                <dd>
-                  {text(networkConfig["gc_ip"])}:{number(
-                    networkConfig["gc_port"],
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Debug stream</dt>
-                <dd>
-                  {text(streamConfig["ip_base_prefix"])}{number(
-                    streamConfig["ip_base_end"],
-                  )}:{number(streamConfig["port"])}
-                </dd>
-              </div>
-            </dl>
-          </section>
-        </aside>
-      </div>
-    {/if}
-
-    {#if geometryModal}
-      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-      <div
-        class="modal-backdrop"
-        onclick={(event) => {
-          if (event.target === event.currentTarget) geometryModal = false;
-        }}
+<main class:full={route.view === "main"}>
+  <header class="strip">
+    <span class="name">
+      <CameraName
+        {camId}
+        name={cameraName}
+        showId
+        onrenamed={() => void refreshHealth()}
+      />
+    </span>
+    <span class="chips">
+      <span
+        class="chip"
+        title={`WebSocket to the backend (detections, geometry, colours): ${$connectionState}`}
+        ><i
+          class="dot"
+          class:ok={$connectionState === "open"}
+          class:warn={$connectionState === "connecting"}
+        ></i>live</span
       >
-        <div class="modal-box" role="dialog" aria-label="Edit field dimensions">
-          <GeometryEditor
-            modal
-            {camId}
-            refinement={calibration?.refinement === true}
-            {refreshToken}
-            onchange={() => {
-              void refreshCalibration();
-              void refreshHealth();
-              void refreshConfig();
-              refreshToken += 1;
-            }}
-            onclose={(
-              result: { kind: "ok" | "error"; text: string } | null,
-            ) => {
-              geometryModal = false;
-              showToast(result);
-            }}
-          />
-        </div>
-      </div>
-    {/if}
-
-    {#if toast}
-      <div class={`toast ${toast.kind}`} role="status">
-        {toast.text}
-        <button
-          onclick={() => {
-            showToast(null);
-          }}
-          aria-label="Dismiss">×</button
+      <span
+        class="chip"
+        title={`vision_processor: ${health?.services.vision_processor?.state ?? "unknown"} · ${detectionState}`}
+        ><i
+          class="dot"
+          class:ok={visionRunning}
+          class:warn={!visionRunning &&
+            health?.services.vision_processor?.want_running}
+        ></i>vision {num(fps, 1)} fps</span
+      >
+      <span class="chip" title={pi?.error ?? "Pi camera service /status"}
+        ><i
+          class="dot"
+          class:ok={pi?.running && !pi.closed}
+          class:warn={pi?.closed}
+        ></i>{piText()}</span
+      >
+      <span class="chip" title="Field calibration of this camera"
+        ><i
+          class="dot"
+          class:ok={calibrationState === "calibrated"}
+          class:warn={calibrationState === "recalibrating"}
+        ></i>{calibrationState === "calibrated"
+          ? "calibrated"
+          : calibrationState === "recalibrating"
+            ? "recalibrating"
+            : "not calibrated"}</span
+      >
+      <span
+        class="chip"
+        title={gc?.running
+          ? `game controller on ${gc.group ?? ""}: ${gc.stage ?? ""} · ${gc.command ?? ""}`
+          : `game controller not seen on ${gc?.group ?? "the referee multicast"}`}
+        ><i
+          class="dot"
+          class:ok={gc?.running}
+          class:warn={!gc?.running && gc?.process_running}
+        ></i>GC</span
+      >
+      <span class="chip metrics">
+        <span
+          title="Detection frames per second reaching this page from vision_processor"
+          >{num(fps, 1)} fps</span
         >
-      </div>
-    {/if}
+        ·
+        <span
+          title="vision_processor processing time per frame (t_sent − t_capture)"
+          >{num(camMetrics?.processing_ms, 1)} ms</span
+        >
+        ·
+        <span
+          title="Detection packets per second on the multicast bus (backend, last 5 s)"
+          >{num(camMetrics?.rate_hz, 1)} pkt/s</span
+        >
+      </span>
+    </span>
+    <span class="actions">
+      <button
+        disabled={refreshing}
+        title={`Re-fetch everything and reconnect${lastUpdated ? ` · last ${lastUpdated.toLocaleTimeString()}` : ""}`}
+        onclick={refreshAll}><Icon name="refresh" size={14} /></button
+      >
+      <button
+        class:active={drawerOpen}
+        title="Log console (` key)"
+        aria-label="Log console"
+        onclick={toggleDrawer}><Icon name="logs" size={14} /></button
+      >
+      {#if route.view !== "main"}
+        <button onclick={closeView}>← back</button>
+      {:else}
+        <button
+          title="Help"
+          onclick={() => {
+            openHelp();
+          }}><Icon name="help" size={14} /> Help</button
+        >
+      {/if}
+      <button
+        class="panic"
+        onclick={() => {
+          openHelp("panic");
+        }}>🚨 Panic</button
+      >
+      <button
+        title="Printable receipt of the whole setup"
+        onclick={() => {
+          go("#/receipt");
+        }}>Receipt</button
+      >
+      <select bind:value={themePref} aria-label="Theme" title="Theme">
+        <option value="light">☀</option>
+        <option value="dark">☾</option>
+        <option value="system">◐</option>
+      </select>
+    </span>
+  </header>
 
-    <footer>
-      <span>{configPayload?.path ?? "Waiting for active configuration"}</span>
-      <span>Backend uptime {number(health?.uptime_s)} s</span>
-    </footer>
-  </main>
-  <LogDrawer
-    open={drawerOpen}
-    piLogFile={health?.services.pi_camera?.log_file ?? null}
-    ontoggle={toggleDrawer}
-    onopenfile={openLogs}
-  />
-{/if}
+  {#if route.view === "help"}
+    {#await loadHelp()}
+      <p class="loading">Loading help…</p>
+    {:then module}
+      <module.default name={route.doc} {dark} onnavigate={openHelp} />
+    {:catch error}
+      <p class="loading">Help failed to load: {String(error)}</p>
+    {/await}
+  {:else if route.view === "logs"}
+    <LogsView file={route.file} onopen={openLogs} />
+  {:else if route.view === "receipt"}
+    {#await loadReceipt()}
+      <p class="loading">Loading…</p>
+    {:then module}
+      <module.default />
+    {/await}
+  {:else}
+    <div class="body">
+      <section class="camera">
+        <CameraView
+          {camId}
+          {cameraLabel}
+          {snapshots}
+          bind:selectedView
+          {cacheBuster}
+          {overlay}
+          {calibration}
+          {calibrationState}
+          {lensInfo}
+          {geometryConfig}
+          {field}
+          bind:cornersMode
+          bind:lensMode
+          onfield={() => (geometryModal = true)}
+          onsaved={modeSaved}
+        />
+      </section>
+      <aside class="side">
+        <nav class="tabs" aria-label="Panels">
+          {#each [["live", "Live"], ["cameras", "Cameras"], ["calibrate", "Calibrate"], ["system", "System"]] as [key, label] (key)}
+            <button
+              class:active={tab === key}
+              onclick={() => {
+                setTab(key as Tab);
+              }}>{label}</button
+            >
+          {/each}
+        </nav>
+        <div class="tab-body">
+          {#if tab === "live"}
+            <LiveTab
+              blue={blueRobots}
+              yellow={yellowRobots}
+              {balls}
+              live={detectionLive}
+              stateText={detectionState}
+              {metrics}
+              names={{ [String(camId)]: cameraLabel }}
+              {uiFps}
+              {wsRate}
+            />
+          {:else if tab === "cameras"}
+            <CamerasTab
+              {health}
+              {calibration}
+              config={activeConfig}
+              calib={cameraCalibration}
+              onchange={onChange}
+              oncorners={() => {
+                cornersMode = true;
+                lensMode = false;
+              }}
+              onlens={() => {
+                lensMode = true;
+                cornersMode = false;
+              }}
+              ontoast={showToast}
+            />
+          {:else if tab === "calibrate"}
+            <CalibrateTab
+              {calibration}
+              config={activeConfig}
+              {camId}
+              {cameraLabel}
+              {refreshToken}
+              onedit={() => (geometryModal = true)}
+              oncorners={() => {
+                cornersMode = true;
+                lensMode = false;
+              }}
+              onchange={onChange}
+              ontoast={showToast}
+            />
+          {:else}
+            <SystemTab
+              {health}
+              reachable={healthReachable}
+              onchange={onChange}
+              oncameras={() => {
+                setTab("cameras");
+              }}
+              onlogs={() => {
+                openLogs();
+              }}
+              ontoast={showToast}
+            />
+          {/if}
+        </div>
+      </aside>
+    </div>
+  {/if}
+
+  {#if geometryModal}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div
+      class="modal-backdrop"
+      onclick={(event) => {
+        if (event.target === event.currentTarget) geometryModal = false;
+      }}
+    >
+      <div class="modal-box" role="dialog" aria-label="Edit field dimensions">
+        <GeometryEditor
+          modal
+          {camId}
+          refinement={calibration?.refinement === true}
+          {refreshToken}
+          onchange={onChange}
+          onclose={(result: Toast) => {
+            geometryModal = false;
+            showToast(result);
+          }}
+        />
+      </div>
+    </div>
+  {/if}
+
+  {#if toast}
+    <div class={`toast ${toast.kind}`} role="status">
+      {toast.text}
+      <button
+        onclick={() => {
+          showToast(null);
+        }}
+        aria-label="Dismiss">×</button
+      >
+    </div>
+  {/if}
+</main>
+
+<LogDrawer
+  open={drawerOpen}
+  piLogFile={pi?.log_file ?? null}
+  ontoggle={toggleDrawer}
+  onopenfile={openLogs}
+/>
 
 <style>
-  :global(*) {
-    box-sizing: border-box;
-  }
-
-  /* Theme tokens: light is the default; App sets data-theme="dark" on
-     <html> (explicitly or from the system preference). */
   :global(:root) {
     color-scheme: light;
-    --page: #e9eeeb;
+    --accent: #276f4b;
+    --page: #f3f5f4;
     --surface: #ffffff;
-    --surface-2: #f5f7f6;
+    --surface-2: #eceff0;
     --text: #17201b;
-    --text-muted: #5b665f;
-    --text-faint: #98aaa0;
-    --border: #c8d0cb;
-    --border-soft: #e7ece9;
-    --ok: #1f5e3d;
+    --text-muted: #5f6b65;
+    --text-faint: #98a39d;
+    --border: #cfd6d2;
+    --border-soft: #e4e9e6;
+    --ok: #1f7a46;
     --ok-bg: #e8f5ed;
     --ok-border: #bfe0cc;
-    --bad: #8a2d29;
+    --bad: #b3261e;
     --bad-bg: #fbeceb;
     --bad-border: #efc9c6;
-    --warn: #8a5a00;
+    --warn: #9a6400;
     --warn-bg: #fff4dc;
     --warn-border: #f0dca8;
     --yellow-bg: #fff4c7;
     --blue-bg: #e7f1fb;
     --blue-text: #1e5c9e;
-    --code-bg: #eef2ef;
+    --code-bg: #eceff0;
   }
 
   :global(:root[data-theme="dark"]) {
     color-scheme: dark;
+    --accent: #4fbf82;
     --page: #121815;
-    --surface: #1b2420;
-    --surface-2: #222d28;
+    --surface: #182019;
+    --surface-2: #222c26;
     --text: #e3ebe6;
     --text-muted: #a5b3ab;
     --text-faint: #7d8c84;
     --border: #34423b;
-    --border-soft: #29342f;
+    --border-soft: #26302b;
     --ok: #8fdcae;
     --ok-bg: #173527;
     --ok-border: #2b5a40;
@@ -1216,315 +743,178 @@
     --code-bg: #26312c;
   }
 
-  :global(html) {
-    background: var(--page);
+  :global(*) {
+    box-sizing: border-box;
   }
 
+  :global(html),
   :global(body) {
     margin: 0;
-    min-width: 320px;
     color: var(--text);
     background: var(--page);
-    font-family: Inter, "Segoe UI", system-ui, sans-serif;
+    font:
+      12.5px/1.4 system-ui,
+      -apple-system,
+      "Segoe UI",
+      sans-serif;
   }
 
-  :global(button) {
+  :global(button),
+  :global(select),
+  :global(input) {
     font: inherit;
   }
 
   main {
+    display: flex;
+    flex-direction: column;
     min-height: 100vh;
   }
 
-  .topbar {
-    min-height: 62px;
+  main.full {
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  .strip {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 24px;
-    padding: 10px 20px;
-    color: #f7faf8;
-    background: #202a25;
-    border-bottom: 3px solid #39a56c;
-  }
-
-  .identity,
-  .header-status,
-  .section-heading,
-  .detection-counts,
-  .identity {
     gap: 12px;
-    min-width: 0;
+    height: 44px;
+    padding: 0 12px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border-soft);
   }
 
-  .product-mark {
-    width: 38px;
-    height: 38px;
-    display: grid;
-    place-items: center;
-    flex: 0 0 38px;
-    border: 1px solid #7fc49c;
-    border-radius: 4px;
-    color: #bfe8cf;
-    font-weight: 750;
-    font-size: 14px;
+  .name {
+    font-weight: 600;
+    white-space: nowrap;
   }
 
-  h1,
-  h2,
-  p {
-    margin: 0;
-  }
-
-  h1 {
-    font-size: 16px;
-    line-height: 1.25;
-    font-weight: 700;
-  }
-
-  .identity p,
-  .section-heading p {
-    margin-top: 2px;
-    color: var(--text-faint);
-    font-size: 12px;
-  }
-
-  .header-status {
-    justify-content: flex-end;
-    gap: 10px;
+  .chips {
+    display: flex;
+    align-items: center;
     flex-wrap: wrap;
+    gap: 4px 10px;
+    min-width: 0;
+    flex: 1;
+    font-size: 12px;
+    color: var(--text-muted);
   }
 
-  .status-badge,
-  .metric,
-  .small-state,
-  .section-tag,
-  .detection-counts span {
-    min-height: 28px;
+  .chip {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    padding: 4px 9px;
-    border-radius: 4px;
-    font-size: 12px;
+    gap: 5px;
     white-space: nowrap;
   }
 
-  .status-badge,
-  .metric {
-    color: #dce5e0;
-    border: 1px solid #46544d;
-    background: #29352f;
+  .chip.metrics {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
   }
 
-  .status-dot {
+  .dot {
     width: 8px;
     height: 8px;
-    flex: 0 0 8px;
     border-radius: 50%;
-    background: #c5524d;
+    background: var(--bad);
   }
 
-  .status-badge.healthy .status-dot {
-    background: #48b477;
+  .dot.ok {
+    background: var(--ok);
   }
 
-  .workspace {
-    display: grid;
-    grid-template-columns: minmax(0, 1.8fr) minmax(360px, 1fr);
-    gap: 12px;
-    padding: 12px;
-    align-items: start;
+  .dot.warn {
+    background: var(--warn);
   }
 
-  .primary-column,
-  .inspector {
-    min-width: 0;
-    display: grid;
-    gap: 12px;
-  }
-
-  .viewer-panel,
-  .detections-panel,
-  .inspector section {
-    min-width: 0;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    background: var(--surface);
-    overflow: hidden;
-  }
-
-  .section-heading {
-    min-height: 54px;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .section-heading.compact {
-    min-height: 42px;
-    padding-block: 8px;
-  }
-
-  h2 {
-    font-size: 13px;
-    line-height: 1.25;
-    font-weight: 700;
-  }
-
-  .small-state,
-  .section-tag {
-    min-height: 24px;
-    color: var(--text-muted);
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-  }
-
-  .view-tabs {
-    min-height: 38px;
+  .actions {
     display: flex;
-    gap: 2px;
-    padding: 4px 6px;
-    overflow-x: auto;
-    background: var(--surface-2);
-    border-bottom: 1px solid var(--border);
+    align-items: center;
+    gap: 4px;
   }
 
-  .view-tabs button {
-    height: 30px;
-    flex: 0 0 auto;
-    padding: 0 10px;
-    border: 1px solid transparent;
-    border-radius: 3px;
-    color: var(--text-muted);
-    background: transparent;
-    cursor: pointer;
-    font-size: 12px;
-  }
-
-  .view-tabs button:hover {
-    color: var(--text);
-    border-color: var(--border);
-    background: var(--surface);
-  }
-
-  .view-tabs button.active {
-    color: #ffffff;
-    background: #276f4b;
-    border-color: #276f4b;
-  }
-
-  .image-stage {
-    width: 100%;
-    aspect-ratio: 16 / 9;
-    display: grid;
-    place-items: center;
-    background: #111713;
-    overflow: hidden;
-  }
-
-  .image-stage img {
-    width: 100%;
-    height: 100%;
-    display: block;
-    object-fit: contain;
-  }
-
-  .overlay-stage {
-    position: relative;
-    width: 100%;
-    height: 100%;
-  }
-
-  .overlay-stage canvas {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-  }
-
-  .overlay-legend {
-    position: absolute;
-    top: 8px;
-    left: 8px;
-    display: flex;
-    gap: 8px;
-    padding: 5px 7px;
-    color: #edf3ef;
-    background: rgba(17, 23, 19, 0.78);
-    border: 1px solid rgba(220, 232, 224, 0.38);
-    border-radius: 3px;
-    font-size: 10px;
-  }
-
-  .overlay-legend span::before {
-    content: "";
-    width: 12px;
-    height: 2px;
-    display: inline-block;
-    margin-right: 4px;
-    vertical-align: 3px;
-    background: #f4f7f5;
-  }
-
-  .overlay-legend .goal-key::before {
-    background: #40cfff;
-  }
-
-  .overlay-legend .marking-key::before {
-    background: #ffd451;
-  }
-
-  .overlay-legend .boundary-key::before {
-    background: #4dd8a0;
-  }
-
-  .overlay-legend .corner-key::before {
-    height: 6px;
-    width: 6px;
-    border-radius: 50%;
-    background: #ff5b55;
-    vertical-align: 1px;
-  }
-
-  /* Detections and Colours side by side on wide screens, stacked when
-     narrow. */
-  .panel-row {
-    min-width: 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
-    gap: 12px;
-    align-items: start;
-  }
-
-  .header-button,
-  .panic-button {
+  .actions button,
+  .actions select {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     height: 28px;
-    padding: 0 10px;
-    color: #dce5e0;
-    background: #29352f;
-    border: 1px solid #46544d;
+    padding: 0 8px;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid transparent;
     border-radius: 4px;
     cursor: pointer;
     font-size: 12px;
-    white-space: nowrap;
   }
 
-  .header-button:hover:not(:disabled) {
-    border-color: #7fc49c;
+  .actions button.active {
+    border-color: var(--accent);
   }
 
-  .panic-button {
-    color: #ffffff;
+  .actions .panic {
+    color: #fff;
     background: #c0322b;
-    border-color: #e0574f;
     font-weight: 700;
   }
 
-  .panic-button:hover {
-    background: #a8261f;
+  .body {
+    display: grid;
+    grid-template-columns: minmax(0, 65fr) minmax(320px, 35fr);
+    gap: 8px;
+    flex: 1;
+    min-height: 0;
+    padding: 8px;
+  }
+
+  .camera {
+    min-height: 0;
+    min-width: 0;
+  }
+
+  .side {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    background: var(--surface);
+    border-radius: 4px;
+  }
+
+  .tabs {
+    display: flex;
+    flex: 0 0 auto;
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  .tabs button {
+    flex: 1;
+    height: 32px;
+    color: var(--text-muted);
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    font-size: 12.5px;
+  }
+
+  .tabs button.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+
+  .tab-body {
+    flex: 1;
+    min-height: 0;
+    padding: 8px 10px;
+    overflow: hidden auto;
+  }
+
+  .loading {
+    padding: 24px;
+    color: var(--text-muted);
   }
 
   .modal-backdrop {
@@ -1542,9 +932,7 @@
     max-height: calc(100vh - 32px);
     overflow: auto;
     background: var(--surface);
-    border: 1px solid var(--border);
     border-radius: 6px;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
   }
 
   .toast {
@@ -1556,7 +944,6 @@
     padding: 10px 14px;
     border-radius: 5px;
     font-size: 13px;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
   }
 
   .toast.ok {
@@ -1580,288 +967,36 @@
     font-size: 15px;
   }
 
-  .help-loading {
-    padding: 24px;
-    color: var(--text-muted);
-  }
+  @media (max-width: 1100px) {
+    main.full {
+      height: auto;
+      overflow: visible;
+    }
 
-  .viewer-actions {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 6px;
-  }
+    .strip {
+      height: auto;
+      flex-wrap: wrap;
+      padding: 6px 12px;
+    }
 
-  .small-state.ok {
-    color: var(--ok);
-    background: var(--ok-bg);
-    border-color: var(--ok-border);
-  }
-
-  .small-state.warn {
-    color: var(--warn);
-    background: var(--warn-bg);
-    border-color: var(--warn-border);
-  }
-
-  .corners-button {
-    height: 28px;
-    padding: 0 10px;
-    border: 1px solid #276f4b;
-    border-radius: 3px;
-    color: #ffffff;
-    background: #276f4b;
-    cursor: pointer;
-    font-size: 12px;
-  }
-
-  .corners-button.icon {
-    display: inline-grid;
-    place-items: center;
-    width: 32px;
-    padding: 0;
-  }
-
-  .header-button.active {
-    border-color: #7fc49c;
-  }
-
-  .corners-button.active {
-    color: #276f4b;
-    background: var(--surface);
-  }
-
-  .corners-message {
-    margin: 0;
-    padding: 7px 12px;
-    color: var(--ok);
-    background: var(--ok-bg);
-    border-bottom: 1px solid var(--ok-border);
-    font-size: 12px;
-  }
-
-  .corners-message button {
-    margin-left: 8px;
-    border: 1px solid var(--ok-border);
-    border-radius: 3px;
-    background: var(--surface);
-    cursor: pointer;
-    font-size: 11px;
-  }
-
-  .detection-state {
-    font-weight: 600;
-  }
-
-  .section-heading p.detection-state.live {
-    color: var(--ok);
-  }
-
-  .section-heading p.detection-state.wait {
-    color: var(--warn);
-  }
-
-  .section-heading p.detection-state.down {
-    color: var(--bad);
-  }
-
-  .image-stage p {
-    color: #aab6af;
-    font-size: 13px;
-  }
-
-  .detection-counts {
-    gap: 6px;
-  }
-
-  .detection-counts span {
-    min-height: 24px;
-    color: var(--text-muted);
-    background: var(--surface-2);
-  }
-
-  .detection-counts .blue-count {
-    color: var(--blue-text);
-    background: var(--blue-bg);
-  }
-
-  .detection-counts .yellow-count {
-    color: var(--warn);
-    background: var(--yellow-bg);
-  }
-
-  .detections-panel table {
-    min-width: 600px;
-  }
-
-  .table-wrap {
-    width: 100%;
-    overflow-x: auto;
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-    font-size: 12px;
-  }
-
-  th,
-  td {
-    height: 36px;
-    padding: 7px 9px;
-    text-align: right;
-    border-bottom: 1px solid var(--border-soft);
-    white-space: nowrap;
-  }
-
-  th {
-    color: var(--text-muted);
-    background: var(--surface-2);
-    font-weight: 600;
-  }
-
-  th:first-child,
-  td:first-child {
-    width: 140px;
-    text-align: left;
-  }
-
-  tr:last-child td {
-    border-bottom: 0;
-  }
-
-  .team-dot {
-    width: 9px;
-    height: 9px;
-    display: inline-block;
-    margin-right: 7px;
-    border-radius: 50%;
-    vertical-align: -1px;
-  }
-
-  .team-dot.blue {
-    background: #2a80c8;
-  }
-
-  .team-dot.yellow {
-    background: #e5be22;
-  }
-
-  .team-dot.orange {
-    background: #e3732f;
-  }
-
-  .empty-row {
-    height: 58px;
-    text-align: center;
-    color: var(--text-muted);
-  }
-
-  .inspector section {
-    overflow: visible;
-  }
-
-  .property-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    margin: 0;
-    padding: 6px 12px 10px;
-  }
-
-  .property-grid div {
-    min-width: 0;
-    min-height: 43px;
-    padding: 7px 8px 6px 0;
-    border-bottom: 1px solid var(--border-soft);
-  }
-
-  .property-grid div:nth-last-child(-n + 2) {
-    border-bottom: 0;
-  }
-
-  dt {
-    margin-bottom: 3px;
-    color: var(--text-muted);
-    font-size: 10px;
-    text-transform: uppercase;
-  }
-
-  dd {
-    margin: 0;
-    min-width: 0;
-    color: var(--text);
-    font-size: 12px;
-    font-weight: 600;
-    overflow-wrap: anywhere;
-  }
-
-  .corner-list {
-    display: grid;
-    gap: 5px;
-    padding: 0 12px 11px;
-    color: var(--text-muted);
-    font-size: 10px;
-    text-transform: uppercase;
-  }
-
-  .corner-list code {
-    color: var(--text);
-    font-size: 10px;
-    line-height: 1.45;
-    text-transform: none;
-    overflow-wrap: anywhere;
-  }
-
-  footer {
-    min-height: 38px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 8px 16px;
-    color: var(--text-muted);
-    font-size: 11px;
-    border-top: 1px solid var(--border);
-  }
-
-  @media (max-width: 1050px) {
-    .workspace {
+    .body {
       grid-template-columns: 1fr;
     }
 
-    .inspector {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+    .camera {
+      height: 56vw;
+      max-height: 60vh;
     }
   }
 
-  @media (max-width: 680px) {
-    .topbar {
-      align-items: flex-start;
-      flex-direction: column;
+  @media (max-width: 700px) {
+    .chip.metrics {
+      display: none;
     }
 
-    .header-status {
-      justify-content: flex-start;
-    }
-
-    .workspace {
-      padding: 8px;
-    }
-
-    .inspector {
-      grid-template-columns: 1fr;
-    }
-
-    .section-heading {
-      align-items: flex-start;
-      flex-direction: column;
-    }
-
-    footer {
-      align-items: flex-start;
-      flex-direction: column;
+    .actions button,
+    .tabs button {
+      min-height: 36px;
     }
   }
 </style>

@@ -10,6 +10,7 @@ export interface PiCameraHealth {
   fps?: number | string | null;
   closed?: boolean;
   control?: boolean;
+  device?: string | null;
   log_file?: string | null;
   last_error?: { text: string; at: number } | null;
   last_line?: { text: string; at: number } | null;
@@ -43,6 +44,22 @@ export interface BackendHealth {
   running: boolean;
   pid: number | null;
   uptime_s?: number;
+  logs_dir?: string | null;
+}
+
+export interface GameControllerHealth {
+  running: boolean;
+  pid: number | null;
+  process_running?: boolean;
+  group?: string;
+  last_packet_age_s?: number | null;
+  packets?: number;
+  stage?: string;
+  command?: string;
+  yellow?: string;
+  blue?: string;
+  yellow_score?: number;
+  blue_score?: number;
 }
 
 export interface CalibrationHealth {
@@ -58,6 +75,7 @@ export interface HealthServices {
   vision_processor?: VisionHealth;
   wrapper_backend?: BackendHealth;
   field_calibration?: CalibrationHealth;
+  game_controller?: GameControllerHealth;
 }
 
 export interface HealthResponse {
@@ -93,4 +111,88 @@ export interface CalibrationStatus {
   boundary_width_goal_line: number;
   image_width: number;
   image_height: number;
+}
+
+// GET /api/metrics
+export interface CameraMetrics {
+  frames: number;
+  rate_hz: number;
+  processing_ms?: number | null;
+  receive_ms?: number | null;
+  robots_per_frame?: number;
+  balls_per_frame?: number;
+  last_age_s?: number;
+}
+
+export type DataMap = Record<string, unknown>;
+
+export interface RobotDetection {
+  robot_id?: number;
+  confidence?: number;
+  x?: number;
+  y?: number;
+  orientation?: number;
+  pixel_x?: number;
+  pixel_y?: number;
+  height?: number;
+}
+
+export interface BallDetection {
+  confidence?: number;
+  x?: number;
+  y?: number;
+  z?: number;
+  pixel_x?: number;
+  pixel_y?: number;
+}
+
+export interface DetectionFrame {
+  frame_number?: number;
+  t_capture?: number;
+  t_sent?: number;
+  camera_id?: number;
+  balls?: BallDetection[];
+  robots_blue?: RobotDetection[];
+  robots_yellow?: RobotDetection[];
+}
+
+export interface GeometryData {
+  field?: DataMap;
+  calib?: DataMap[];
+  models?: DataMap;
+}
+
+export interface WrapperPacket {
+  detection?: DetectionFrame;
+  geometry?: GeometryData;
+  source?: string;
+}
+
+export interface ConfigResponse {
+  path: string;
+  modified_at: number;
+  config: DataMap;
+}
+
+export interface Snapshot {
+  cam_id: string;
+  view: string;
+}
+
+export function asRecord(value: unknown): DataMap {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as DataMap)
+    : {};
+}
+
+export function num(value: unknown, digits = 0): string {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(digits) : "--";
+}
+
+export function duration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return "--";
+  if (seconds < 60) return `${seconds.toFixed(0)} s`;
+  if (seconds < 3600) return `${(seconds / 60).toFixed(0)} min`;
+  return `${(seconds / 3600).toFixed(1)} h`;
 }
