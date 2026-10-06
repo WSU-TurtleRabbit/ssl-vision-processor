@@ -24,7 +24,7 @@
 #include "snapshotwriter.h"
 #include "udpsocket.h"
 #include "Perspective.h"
-#include "opencl.h"
+#include "compute.h"
 
 
 typedef struct __attribute__ ((packed)) RGB {
