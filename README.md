@@ -6,6 +6,34 @@ It currently supports Teledyne FLIR (Spinnaker), Matrix Vision (Bluefox3/mvIMPAC
 
 ![Software architecture](architecture.png)
 
+```mermaid
+flowchart LR
+    subgraph cams["Cameras (one vision_processor per camera)"]
+        direct["USB / Spinnaker / mvIMPACT camera<br/>attached to the processing PC"]
+        pi["Raspberry Pi + USB camera<br/>pi_camera/camstream.py<br/>MJPEG over HTTP"]
+    end
+    subgraph pc["Processing PC (e.g. Jetson AGX Orin)"]
+        vp["vision_processor (C++)<br/>OpenCL blob detection,<br/>calibration, tracking"]
+        img[("img/<br/>debug snapshots")]
+        be["wrapper_backend (Python)<br/>:8765 geometry + WebSocket"]
+    end
+    fe["wrapper-frontend (Svelte)<br/>browser UI :5173"]
+    teams["Team AIs / game controller"]
+
+    direct --> vp
+    pi -->|"http://PI-IP:8080/stream<br/>camera on while connected"| vp
+    vp -->|"detections + calibration<br/>multicast 224.5.23.2:10006"| teams
+    vp -->|detections + calibration| be
+    be -->|"field geometry 1 Hz<br/>multicast 224.5.23.2:10006"| vp
+    be -->|geometry| teams
+    vp -->|writes| img
+    img -->|"GET /snapshot"| be
+    be <-->|"WebSocket /ws"| fe
+```
+
+- **Frontend vs backend:** the backend does no image work. It merges the geometry, re-broadcasts it, and relays live data and snapshots. The frontend only displays what the backend sends.
+- **Jetson + Raspberry Pi camera:** setup, start-up order and troubleshooting are in [JETSON.md](JETSON.md); the Pi side is in [pi_camera/README.md](pi_camera/README.md).
+
 The `vision_processor` is the image processing component that processes a camera feed
 to multicast the detected robot and ball positions and a debug video livestream.
 The geometry publisher `geom_publisher.py` publishes the field geometry

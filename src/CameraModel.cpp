@@ -16,6 +16,9 @@
 #include "CameraModel.h"
 #include "log.h"
 
+#include <algorithm>
+#include <cmath>
+
 
 float goalBoundaryWidth(const SSL_GeometryFieldSize& field) {
 	return field.has_boundary_width_goal_line() ? field.boundary_width_goal_line() : field.boundary_width();
@@ -177,7 +180,18 @@ void CameraModel::updateEuler(const Eigen::Vector3f &euler) {
 }
 
 Eigen::Vector3f CameraModel::getEuler() {
+#if EIGEN_VERSION_AT_LEAST(3, 4, 90)
 	return f2iOrientation.toRotationMatrix().canonicalEulerAngles(0, 1, 2);
+#else
+	// Eigen < 3.4.90 (e.g. Ubuntu 22.04/JetPack 6) lacks canonicalEulerAngles; same XYZ convention and ranges:
+	// x, z in [-pi, pi], y in [-pi/2, pi/2]
+	const Eigen::Matrix3f r = f2iOrientation.toRotationMatrix();
+	const float y = std::asin(std::clamp(r(0, 2), -1.0f, 1.0f));
+	if(std::abs(r(0, 2)) > 1.0f - 1e-6f) // Gimbal lock, attribute all remaining rotation to x
+		return {std::atan2(r(2, 1), r(1, 1)), y, 0.0f};
+
+	return {std::atan2(-r(1, 2), r(2, 2)), y, std::atan2(-r(0, 1), r(0, 0))};
+#endif
 }
 
 
