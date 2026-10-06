@@ -2,7 +2,7 @@
 
 # 🚨 Something is broken (ZED Box)
 
-**This page is for the ZED Box** (ZED 2i plugged into the Jetson). Pi camera setup? → [Pi camera panic page](../pi-camera/panic.md)
+**This page is for the ZED Box** (ZED 2i plugged into the Jetson). Pi camera setup? → [Pi camera panic page](../pi/panic.md)
 
 **Breathe.** Nothing here can break the hardware. Go top to bottom and stop at the first ❌.
 
@@ -13,7 +13,7 @@ Run each check on the ZED Box, from the repo folder (`cd ~/ssl-software/TIGERS/v
 | # | Check | ✅ Good looks like | ❌ If not → |
 |---|---|---|---|
 | 1 | `lsusb -d 2b03:` | at least one line (StereoLabs USB id `2b03`) | [Fix A: camera](#fix-a-camera-zed) |
-| 2 | `pgrep -a vision_processor` | a line with `config-zed-lab.yml` | [Fix B: vision_processor](#fix-b-vision_processor) |
+| 2 | `pgrep -a vision_processor` | a line with `zed-config-lab.yml` | [Fix B: vision_processor](#fix-b-vision_processor) |
 | 3 | `curl -m 2 http://localhost:8765/api/health` | `{"status": "ok", ...}` | [Fix C: backend](#fix-c-backend) |
 | 4 | open `http://192.168.210.130:8765` | the web page | [Fix D: web page](#fix-d-web-page) |
 | 5 | web page shows robots | robot count > 0 | [Fix E: no robots](#fix-e-no-robots) |
@@ -44,7 +44,7 @@ Still unsure whether the camera itself works? Stop `vision_processor` and run `/
 ### Fix B: vision_processor
 
 - **Services panel on the web page:** press **Start** (or **Restart**), then open **Show log** and read the last lines.
-- **No web page?** Start it by hand: `build/vision_processor config-zed-lab.yml`
+- **No web page?** Start it by hand: `build/vision_processor zed-config-lab.yml`
 - **Healthy output:** `Using device: CUDA … Orin`, then `[ZED] Opened ZED 2i …`, then a `status: detecting | … fps | N robots …` line every 5 seconds.
 
 | It prints | Do this |
@@ -61,7 +61,7 @@ More: [troubleshooting → vision_processor](../troubleshooting.md#vision_proces
 ### Fix C: backend
 
 ```bash
-PATH=$HOME/.local/bin:$PATH ./start_wrapper.sh geometry-wrapper-lab-divB.yml --vision-config config-zed-lab.yml --start-vision
+PATH=$HOME/.local/bin:$PATH ./start_wrapper.sh geometry-wrapper-lab-divB.yml --vision-config zed-config-lab.yml --start-vision
 ```
 
 | It prints | Do this |

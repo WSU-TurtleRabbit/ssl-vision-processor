@@ -24,7 +24,7 @@ Open a terminal and copy **one** block: the one for your computer.
 
 ```bash
 cd ~/ssl-software/TIGERS/vision-processor
-PATH=$HOME/.local/bin:$PATH ./start_wrapper.sh geometry-wrapper-lab-divB.yml --vision-config config-zed-lab.yml --start-vision
+PATH=$HOME/.local/bin:$PATH ./start_wrapper.sh geometry-wrapper-lab-divB.yml --vision-config zed-config-lab.yml --start-vision
 ```
 
 Then open **http://192.168.210.130:8765** in a browser.
@@ -51,9 +51,9 @@ Press **Ctrl+C** in that terminal. That's it.
 | Web page won't open | Is the terminal from step 2 still running? If not, start again. |
 | Web page says "frontend is not built" | `cd wrapper-frontend && PATH=$HOME/.local/node/bin:$PATH npm ci && npm run build` |
 | 0 robots | The field corners need clicking: **Set field corners** on the web page |
-| Anything else | The panic page for your setup: [🎥 ZED Box](docs/zed-box/panic.md) · [📷 Pi camera](docs/pi-camera/panic.md) |
+| Anything else | The panic page for your setup: [🎥 ZED Box](docs/zed/panic.md) · [📷 Pi camera](docs/pi/panic.md) |
 
 ## More
 
-- **Start/stop in detail:** [🎥 ZED Box](docs/zed-box/start-stop.md) · [📷 Pi camera](docs/pi-camera/start-stop.md)
+- **Start/stop in detail:** [🎥 ZED Box](docs/zed/start-stop.md) · [📷 Pi camera](docs/pi/start-stop.md)
 - **Everything else** (calibration, colours, setup): [docs/README.md](docs/README.md)

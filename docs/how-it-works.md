@@ -1,4 +1,4 @@
-[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi-camera/panic.md) · [🎥 ZED](zed-box/panic.md)
+[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi/panic.md) · [🎥 ZED](zed/panic.md)
 
 # 🧩 How it works
 
@@ -42,7 +42,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph box["ZED Box (Jetson Orin NX) · 192.168.210.130"]
-        cam["ZED 2i<br/>USB 3"] -->|"ZED SDK, GPU"| vp["vision_processor<br/>config-zed-lab.yml"]
+        cam["ZED 2i<br/>USB 3"] -->|"ZED SDK, GPU"| vp["vision_processor<br/>zed-config-lab.yml"]
         img[("img/<br/>pictures + colours")]
         be["backend + web page<br/>:8765"]
     end
@@ -90,7 +90,7 @@ Only **one** viewer at a time. That's why opening the stream in a browser while 
 
 | File | Written by | Used for |
 |---|---|---|
-| camera config: 📷 `config-pi-cam.yml` · 🎥 `config-zed-lab.yml` | you / the web page | camera settings, camera height, field corners, colours |
+| camera config: 📷 `config-pi-cam.yml` · 🎥 `zed-config-lab.yml` | you / the web page | camera settings, camera height, field corners, colours |
 | field file: 📷 `geometry-event.yml` · 🎥 `geometry-wrapper-lab-divB.yml` | you | field size |
 | `img/0.raw.jpg` | vision_processor (every second) | camera picture on the web page, corner clicking |
 | `img/0.colors.json` | vision_processor (2×/s) | colour panel on the web page |

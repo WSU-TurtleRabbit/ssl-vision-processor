@@ -2,7 +2,7 @@
 
 # ▶️ Start and stop (Pi camera)
 
-**This page is for the Pi camera setup:** the USB camera on a Raspberry Pi, streaming to the AGX Jetson. Using the ZED Box instead? → [ZED Box start / stop](../zed-box/start-stop.md)
+**This page is for the Pi camera setup:** the USB camera on a Raspberry Pi, streaming to the AGX Jetson. Using the ZED Box instead? → [ZED Box start / stop](../zed/start-stop.md)
 
 Every command runs **on the Jetson**, from the repo folder, each in **its own terminal**:
 

@@ -94,16 +94,31 @@ Corners mode also has an **Orientation** bar once 4 corners are placed: *Rotate 
     },
   });
 
-  // Doc link -> in-app doc name ("calibration.md", "../pi_camera/README.md").
-  function docTarget(href: string): { name: string; anchor?: string } | null {
-    const match = /^(?:\.\/)?((?:\.\.\/pi_camera\/)?[\w-]+)\.md(#.*)?$/.exec(
-      href,
-    );
-    if (!match?.[1]) return null;
-    const docName = match[1] === "../pi_camera/README" ? "pi-camera" : match[1];
-    if (docName.includes("/")) return null;
-    return match[2]
-      ? { name: docName, anchor: match[2].slice(1) }
+  // Doc link -> in-app doc name, resolved relative to the current doc. Per-setup
+  // pages live in docs/<setup>/ and are served as "<setup>-<name>" ("zed/panic.md"
+  // -> "zed-panic"); the running setup's pages also answer to their bare name.
+  // "calibration.md", "zed/panic.md", "../calibration.md", "../pi_camera/README.md"
+  function docTarget(
+    href: string,
+    current: string,
+  ): { name: string; anchor?: string } | null {
+    const match =
+      /^(?:\.\/)?((?:\.\.\/){0,2})((?:[\w-]+\/)?[\w-]+)\.md(#.*)?$/.exec(href);
+    if (!match?.[2]) return null;
+    const ups = (match[1] ?? "").length / 3;
+    const path = match[2];
+    const setup = /^(zed|pi)-/.exec(current)?.[1];
+    let docName: string | null;
+    if (path === "pi_camera/README" && ups >= 1) docName = "pi-camera";
+    else if (ups > 1) docName = null;
+    else if (path.includes("/")) {
+      const [dir = "", stem = ""] = path.split("/");
+      docName = dir === "zed" || dir === "pi" ? `${dir}-${stem}` : null;
+    } else if (ups === 1) docName = path;
+    else docName = setup && current !== "pi-camera" ? `${setup}-${path}` : path;
+    if (!docName) return null;
+    return match[3]
+      ? { name: docName, anchor: match[3].slice(1) }
       : { name: docName };
   }
 
@@ -115,11 +130,12 @@ Corners mode also has an **Orientation** bar once 4 corners are placed: *Rotate 
       const text = await response.text();
       const items: NavItem[] = [{ name: "README", label: "🏠 Home" }];
       for (const match of text.matchAll(/\[([^\]]+)\]\(([^)]+)\)/g)) {
-        const target = docTarget(match[2] ?? "");
+        const target = docTarget(match[2] ?? "", "README");
         if (!target || target.anchor) continue;
         if (items.some((item) => item.name === target.name)) continue;
         const label = (match[1] ?? target.name)
-          .replace(/\.\.\/pi_camera\/README\.md/, "Pi camera")
+          .replace(/\.\.\/pi_camera\/README\.md/, "Pi camera (Raspberry Pi)")
+          .replace(/\.\.\/AGENTS\.md/, "Naming rules")
           .replace(/\.md$/, "");
         items.push({ name: target.name, label });
       }
@@ -251,7 +267,7 @@ Corners mode also has an **Orientation** bar once 4 corners are placed: *Rotate 
       document.getElementById(href.slice(1))?.scrollIntoView();
       return;
     }
-    const target = docTarget(href);
+    const target = docTarget(href, name);
     if (target) {
       event.preventDefault();
       onnavigate(target.name, target.anchor);

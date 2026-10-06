@@ -1,4 +1,4 @@
-[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi-camera/panic.md) · [🎥 ZED](zed-box/panic.md)
+[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi/panic.md) · [🎥 ZED](zed/panic.md)
 
 # 🎨 Colours and sunlight
 
@@ -18,7 +18,7 @@ flowchart LR
 
 - **How strongly colours stick to the reference** (`reference_force` / `history_force` in the `color:` section):
   - 📷 **Pi camera** (`config-pi-cam.yml`): a **weak pull** (`0.02` / `0.8`), so colours follow changing daylight within a few seconds. The picture above shows these numbers.
-  - 🎥 **ZED Box** (`config-zed-lab.yml`): `0.1` / `0.7`, because the ZED's automatic exposure and white balance already move the colours. Don't set `reference_force: 0` there.
+  - 🎥 **ZED Box** (`zed-config-lab.yml`): `0.1` / `0.7`, because the ZED's automatic exposure and white balance already move the colours. Don't set `reference_force: 0` there.
 - **Brightness-free colours.** Colours are stored without brightness (dRGB), so a brighter or darker room changes them less.
 - **No restart needed.** Changes to the `color:` section apply within half a second.
 
@@ -37,8 +37,8 @@ The swatches show the colour's hue only (brightness is removed), so they may loo
 |---|---|
 | Robots flip between blue and yellow team, or IDs change | Raise `reference_force` toward its limit (below) in your camera config. Check the dots aren't washed out to white. |
 | Ball not found | Pick the orange from the image (panel → **Pick** → orange) |
-| Markers look white on the camera picture | Too bright: lower exposure or gain. 📷 [on the Pi](../pi_camera/README.md#5-adjusting-camera-settings) · 🎥 [ZED settings](zed-box/camera.md) |
-| Everything flickers when clouds pass | Use manual exposure, so the camera doesn't keep re-adjusting. 📷 on the Pi · 🎥 `exposure:` in `config-zed-lab.yml` |
+| Markers look white on the camera picture | Too bright: lower exposure or gain. 📷 [on the Pi](../pi_camera/README.md#5-adjusting-camera-settings) · 🎥 [ZED settings](zed/camera.md) |
+| Everything flickers when clouds pass | Use manual exposure, so the camera doesn't keep re-adjusting. 📷 on the Pi · 🎥 `exposure:` in `zed-config-lab.yml` |
 | Panel says "not publishing" | `vision_processor` isn't running, or is an old build: `make -j6 -C build vision_processor`, then restart it |
 
 The highest allowed `reference_force` is `0.5 − history_force / 2`: 0.1 on the 📷 Pi camera (history 0.8), 0.15 on the 🎥 ZED Box (history 0.7).

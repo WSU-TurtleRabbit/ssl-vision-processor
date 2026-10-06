@@ -36,8 +36,8 @@ flowchart LR
 
 - **Frontend vs backend:** the backend does no image work. It merges the geometry, re-broadcasts it, and relays live data and snapshots. The frontend only displays what the backend sends.
 - **Our Jetson setups** (quick start: [00-START-HERE.md](00-START-HERE.md), all docs: [docs/README.md](docs/README.md)):
-  - **ZED Box** (ZED 2i on the Jetson): [docs/zed-box/start-stop.md](docs/zed-box/start-stop.md), something broke? [docs/zed-box/panic.md](docs/zed-box/panic.md)
-  - **Jetson + Raspberry Pi camera**: [docs/pi-camera/start-stop.md](docs/pi-camera/start-stop.md), something broke? [docs/pi-camera/panic.md](docs/pi-camera/panic.md). The Pi side is in [pi_camera/README.md](pi_camera/README.md).
+  - **ZED Box** (ZED 2i on the Jetson): [docs/zed/start-stop.md](docs/zed/start-stop.md), something broke? [docs/zed/panic.md](docs/zed/panic.md)
+  - **Jetson + Raspberry Pi camera**: [docs/pi/start-stop.md](docs/pi/start-stop.md), something broke? [docs/pi/panic.md](docs/pi/panic.md). The Pi side is in [pi_camera/README.md](pi_camera/README.md).
 
 The `vision_processor` is the image processing component that processes a camera feed
 to multicast the detected robot and ball positions and a debug video livestream.

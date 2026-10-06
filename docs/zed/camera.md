@@ -2,7 +2,7 @@
 
 # 🎥 ZED camera settings
 
-All settings are in the `camera:` section of **`config-zed-lab.yml`**. After changing them, **Restart** `vision_processor` in the Services panel.
+All settings are in the `camera:` section of **`zed-config-lab.yml`**. After changing them, **Restart** `vision_processor` in the Services panel.
 
 `vision_processor` reads the ZED through the **ZED SDK** (`driver: ZED`). The SDK grabs the left lens's picture and shrinks it on the GPU. Only the **left lens** is used for detection.
 
@@ -20,9 +20,12 @@ All settings are in the `camera:` section of **`config-zed-lab.yml`**. After cha
 | `gain` | `0.0` | `0` = automatic. Otherwise 0–100. |
 | `white_balance` | `OUTDOOR` | `OUTDOOR` or `INDOOR` = automatic. Manual: `white_balance: {temperature: 4500}` (2800–6500 K). |
 
-**Automatic exposure and white balance move the colours a little.** That's why `config-zed-lab.yml` lets the colours adapt (`reference_force: 0.1`, `history_force: 0.7`). Don't set `reference_force: 0` (frozen colours) while exposure is automatic. See [🎨 colours.md](../colours.md).
+**Automatic exposure and white balance move the colours a little.** That's why `zed-config-lab.yml` lets the colours adapt (`reference_force: 0.1`, `history_force: 0.7`). Don't set `reference_force: 0` (frozen colours) while exposure is automatic. See [🎨 colours.md](../colours.md).
 
 ## Frame rate and resolution
+
+Why these settings, and what was tried and dropped: [🧭 decisions.md](decisions.md).
+
 
 Measured on the lab field on 2026-10-06, 30 s each:
 
@@ -32,6 +35,8 @@ Measured on the lab field on 2026-10-06, 30 s each:
 | robots per frame / ball found | 2.00 / 100 % | 2.00 / 100 % | 2.00 / 100 % |
 | robot confidence | 0.654 | 0.656 | 0.605 |
 | delay from camera to network | 3.9 ms | **2.7 ms** | 13.1 ms |
+
+**Measure it yourself:** stop `vision_processor`, then run `.venv/bin/python tools/zed-benchmark.py`. It runs each setting for 30 s on the live field and prints a table like the one above (`--only "960x540"` runs just one).
 
 - **Keep 768×432 at 60 fps.** A bigger picture made it slower and less sure, and didn't find the ball any better.
 - **A smaller picture is worse.** Tested on 2026-09-09: 672×376 lost the ball completely.

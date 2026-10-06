@@ -1,4 +1,4 @@
-[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi-camera/panic.md) · [🎥 ZED](zed-box/panic.md)
+[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi/panic.md) · [🎥 ZED](zed/panic.md)
 
 # 📐 Calibration
 
@@ -22,7 +22,7 @@ flowchart LR
 1. **Measure** the mat area and the camera height ([how to measure](#measuring-the-field-and-the-camera)).
 2. **Put the numbers in the files:**
    - Field size goes in the field file (`field_length`, `field_width`, `boundary_width`, `boundary_width_goal_line`): 📷 `geometry-event.yml` · 🎥 `geometry-wrapper-lab-divB.yml`. Then restart the backend.
-   - Camera height goes in the camera config (`camera_height`): 📷 `config-pi-cam.yml` (now 1555 mm) · 🎥 `config-zed-lab.yml` (now 2000 mm, [needs checking](zed-box/camera.md#camera-height)).
+   - Camera height goes in the camera config (`camera_height`): 📷 `config-pi-cam.yml` (now 1555 mm) · 🎥 `zed-config-lab.yml` (now 2000 mm, [needs checking](zed/camera.md#camera-height)).
 3. **Click the corners:** on the web page press **Set field corners**, then click the **4 outer corners of the mats** on the camera picture.
    - **Corner 1** becomes the field's origin corner (−x, −y). Then go around the rectangle.
    - **Save** writes the corners, clears the old calibration and restarts `vision_processor` for you.
@@ -57,7 +57,7 @@ flowchart LR
 - **The boundary** is a margin inside the mats, here 150 mm.
 - **Goal and penalty-area sizes** in the file are placeholders, scaled to fit. Replace them with the real goal sizes.
 
-**Camera height** (`camera_height` in the camera config). 📷 Pi: **1555 mm** · 🎥 ZED Box: 2000 mm in the config, about 2.7 m measured by the ZED ([check it](zed-box/camera.md#camera-height))
+**Camera height** (`camera_height` in the camera config). 📷 Pi: **1555 mm** · 🎥 ZED Box: 2000 mm in the config, about 2.7 m measured by the ZED ([check it](zed/camera.md#camera-height))
 
 ```
         ┌─────────┐  camera box
@@ -87,7 +87,7 @@ When the outer rectangle (both sidelines and both goal lines) is visible as whit
 
 ## Always needed
 
-- **Fixed camera settings and steady light.** 📷 Set them on the Pi ([camera settings](../pi_camera/README.md#5-adjusting-camera-settings)) · 🎥 in `config-zed-lab.yml` ([ZED camera settings](zed-box/camera.md)).
+- **Fixed camera settings and steady light.** 📷 Set them on the Pi ([camera settings](../pi_camera/README.md#5-adjusting-camera-settings)) · 🎥 in `zed-config-lab.yml` ([ZED camera settings](zed/camera.md)).
 - **Robots with standard SSL markers, and an orange ball.** Colours are learned automatically ([🎨 colours.md](colours.md)).
 
 Next: [🎨 colours.md](colours.md)

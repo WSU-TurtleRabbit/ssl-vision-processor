@@ -1,15 +1,15 @@
-[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi-camera/panic.md) · [🎥 ZED](zed-box/panic.md)
+[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi/panic.md) · [🎥 ZED](zed/panic.md)
 
 # 🔍 Troubleshooting (detailed)
 
-In a hurry? → the panic page for your setup is shorter: [📷 Pi camera](pi-camera/panic.md) · [🎥 ZED Box](zed-box/panic.md). This page is for when you have an error message to look up.
+In a hurry? → the panic page for your setup is shorter: [📷 Pi camera](pi/panic.md) · [🎥 ZED Box](zed/panic.md). This page is for when you have an error message to look up.
 
 ## Which part is broken?
 
 ```mermaid
 flowchart TD
     S["Something doesn't work"] --> P{"Camera OK?<br/>📷 curl PI:8080/status<br/>🎥 lsusb -d 2b03:"}
-    P -->|no| PI["📷 pi_camera/README.md<br/>🎥 zed-box/panic.md"]
+    P -->|no| PI["📷 pi_camera/README.md<br/>🎥 zed/panic.md"]
     P -->|yes| V{"vision_processor<br/>keeps running?"}
     V -->|"no / exits"| VP["→ vision_processor"]
     V -->|yes| B{"curl localhost:8765/api/health<br/>answers?"}
@@ -19,7 +19,7 @@ flowchart TD
     F -->|"yes, but no data"| D["Backend sees no data:<br/>vision_processor running?<br/>right --vision-config?"]
 ```
 
-Camera problems → 📷 [pi_camera/README.md troubleshooting](../pi_camera/README.md#troubleshooting) · 🎥 [ZED Box panic page, Fix A](zed-box/panic.md#fix-a-camera-zed)
+Camera problems → 📷 [pi_camera/README.md troubleshooting](../pi_camera/README.md#troubleshooting) · 🎥 [ZED Box panic page, Fix A](zed/panic.md#fix-a-camera-zed)
 
 ## vision_processor
 
@@ -28,7 +28,7 @@ flowchart TD
     A["build/vision_processor YOUR-CONFIG.yml"] --> B{"What happens?"}
     B -->|"📷 No OpenCL platform / device<br/>(CPU build only)"| B1["clinfo -l empty →<br/>sudo apt install pocl-opencl-icd"]
     B -->|"📷 Image creation error: -59<br/>(CPU build only)"| B9["opencl.cpp must use CL_RGBA<br/>(PoCL rejects 1-channel)"]
-    B -->|"Unknown camera/image driver: ZED"| B2["🎥 build without the ZED SDK →<br/>zed-box/setup.md"]
+    B -->|"Unknown camera/image driver: ZED"| B2["🎥 build without the ZED SDK →<br/>zed/setup.md"]
     B -->|"bad file: robot-heights.yml"| B3["Run from the repo folder"]
     B -->|"Saved sample image, then stops"| B4["Not calibrated →<br/>calibration.md"]
     B -->|"Hangs, no output"| B5{"wait_for_geometry: true?"}
@@ -39,9 +39,9 @@ flowchart TD
 
 | Symptom | Fix |
 |---|---|
-| `frame time overrun: 40 ms` lines | Too slow for the camera fps. Use full-power mode ([performance.md](performance.md)) or lower the fps (📷 on the Pi · 🎥 `fps:` in `config-zed-lab.yml`). |
+| `frame time overrun: 40 ms` lines | Too slow for the camera fps. Use full-power mode ([performance.md](performance.md)) or lower the fps (📷 on the Pi · 🎥 `fps:` in `zed-config-lab.yml`). |
 | Debug pictures (gradient/blob views) look striped | Known side effect of the CPU (PoCL) build only. Detection is not affected. |
-| `GStreamer warning ... no source element for URI "/dev/video0"` | Wrong config: the USB draft config. Use 📷 `config-pi-cam.yml` or 🎥 `config-zed-lab.yml`. |
+| `GStreamer warning ... no source element for URI "/dev/video0"` | Wrong config: the USB draft config. Use 📷 `config-pi-cam.yml` or 🎥 `zed-config-lab.yml`. |
 
 ## Backend
 

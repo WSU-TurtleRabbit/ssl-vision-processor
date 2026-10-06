@@ -2,7 +2,7 @@
 
 # 🚨 Something is broken (Pi camera)
 
-**This page is for the Pi camera setup:** the USB camera on a Raspberry Pi, streaming to the AGX Jetson. Using the ZED Box instead? → [ZED Box panic page](../zed-box/panic.md)
+**This page is for the Pi camera setup:** the USB camera on a Raspberry Pi, streaming to the AGX Jetson. Using the ZED Box instead? → [ZED Box panic page](../zed/panic.md)
 
 **Breathe.** Nothing here can break the hardware. Go top to bottom and stop at the first ❌.
 

@@ -1,4 +1,4 @@
-[🏠 Docs home](../docs/README.md) · [🚨 PANIC](../docs/pi-camera/panic.md) · [▶️ Start / Stop](../docs/pi-camera/start-stop.md) · 📷 Pi camera
+[🏠 Docs home](../docs/README.md) · [🚨 PANIC](../docs/pi/panic.md) · [▶️ Start / Stop](../docs/pi/start-stop.md) · 📷 Pi camera
 
 # Raspberry Pi network camera
 

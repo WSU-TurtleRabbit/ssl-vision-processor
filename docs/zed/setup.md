@@ -4,7 +4,7 @@
 
 **Only needed once per box.** This one (`GTW-ONX-E15GN52P`) is already set up.
 
-The ZED Box is a StereoLabs Jetson **Orin NX** with Ubuntu 20.04 (JetPack 5, CUDA 11.4). The **ZED SDK** comes preinstalled in `/usr/local/zed`. Pi camera setup instead? → [Pi camera setup](../pi-camera/setup.md)
+The ZED Box is a StereoLabs Jetson **Orin NX** with Ubuntu 20.04 (JetPack 5, CUDA 11.4). The **ZED SDK** comes preinstalled in `/usr/local/zed`. Pi camera setup instead? → [Pi camera setup](../pi/setup.md)
 
 ## 1. System packages (needs sudo)
 
@@ -26,7 +26,7 @@ The CMake output must include:
 - `CUDA backend enabled (11.4…, sm_87)`
 - `ZED SDK found: /usr/local/zed/lib/libsl_zed.so`
 
-Check it: start `build/vision_processor config-zed-lab.yml`. The first lines must say `Using device: CUDA … Orin` and `[ZED] Opened ZED 2i …`.
+Check it: start `build/vision_processor zed-config-lab.yml`. The first lines must say `Using device: CUDA … Orin` and `[ZED] Opened ZED 2i …`.
 
 | Build error | Fix |
 |---|---|

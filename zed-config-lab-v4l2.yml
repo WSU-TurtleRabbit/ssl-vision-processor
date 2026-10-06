@@ -1,4 +1,5 @@
-# Competition-style TIGERs VisionProcessor config for the local lab field.
+# OLD ZED setup: the ZED 2i read as a plain USB webcam (V4L2, OpenCV driver, 2560x720 side-by-side, left half).
+# Replaced by zed-config-lab.yml (ZED SDK driver, 60 fps). Kept for comparison; the CPU-era comments below are out of date.
 cam_id: 0
 bot_heights_file: robot-heights.yml
 

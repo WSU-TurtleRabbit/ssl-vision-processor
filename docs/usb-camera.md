@@ -1,9 +1,9 @@
-[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi-camera/panic.md) · [🎥 ZED](zed-box/panic.md)
+[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi/panic.md) · [🎥 ZED](zed/panic.md)
 
 # 🔌 USB camera on the Jetson: TODO
 
 > **TODO, not in use.** This page and `config-usb-cam.yml` are an **untested draft** for a plain USB webcam, kept for later.
-> **The ZED 2i does not use this page.** It has its own driver: [zed-box/camera.md](zed-box/camera.md).
+> **The ZED 2i does not use this page.** It has its own driver: [zed/camera.md](zed/camera.md).
 
 The same USB camera could be plugged straight into the Jetson; then the Pi is not needed.
 
@@ -23,7 +23,7 @@ flowchart LR
 ## Draft steps
 
 1. **Find the camera:** `v4l2-ctl --list-devices`. Use the camera's first `/dev/videoN`, and set it as `path:` in `config-usb-cam.yml`.
-2. **Start** like the Pi setup ([pi-camera/start-stop.md](pi-camera/start-stop.md)), with `config-usb-cam.yml` in both commands.
+2. **Start** like the Pi setup ([pi/start-stop.md](pi/start-stop.md)), with `config-usb-cam.yml` in both commands.
 3. **Camera settings** are applied *after* `vision_processor` has started:
    ```bash
    v4l2-ctl -d /dev/video0 --set-ctrl=power_line_frequency=1 --set-ctrl=auto_exposure=1 --set-ctrl=exposure_time_absolute=100

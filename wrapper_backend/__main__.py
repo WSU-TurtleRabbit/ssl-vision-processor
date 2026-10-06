@@ -140,7 +140,11 @@ async def _main() -> None:
     gc = gamecontroller.GameController(
         str(network.get("gc_ip", "224.5.23.1")), int(network.get("gc_port", 10003))
     )
-    docs.register(http_app, REPO_ROOT)
+    docs.register(
+        http_app,
+        REPO_ROOT,
+        docs.setup_of(calibration.read_config(args.vision_config).get("camera")),
+    )
     token_file = args.camera_token_file
     if token_file is None and (REPO_ROOT / ".camera-token").is_file():
         token_file = REPO_ROOT / ".camera-token"

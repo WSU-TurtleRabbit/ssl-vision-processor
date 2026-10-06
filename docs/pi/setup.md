@@ -2,7 +2,7 @@
 
 # 🛠️ One-time setup (Pi camera + AGX Jetson)
 
-**This page is for the Pi camera setup:** the USB camera on a Raspberry Pi, streaming to the AGX Jetson. Using the ZED Box instead? → [ZED Box setup](../zed-box/setup.md)
+**This page is for the Pi camera setup:** the USB camera on a Raspberry Pi, streaming to the AGX Jetson. Using the ZED Box instead? → [ZED Box setup](../zed/setup.md)
 
 **Only needed once per Jetson.** This one is already set up.
 
