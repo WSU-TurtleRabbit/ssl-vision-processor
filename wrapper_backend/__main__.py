@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import logging
 import signal
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from collections.abc import Awaitable, Callable
@@ -24,6 +25,7 @@ from wrapper_backend import (
     colors,
     docs,
     fieldgeometry,
+    logs,
     metrics,
     operator,
     snapshot,
@@ -37,6 +39,7 @@ from wrapper_backend.multicast import Multicast
 log = logging.getLogger("wrapper_backend")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+LOGS_DIR = REPO_ROOT / "logs"
 
 
 @web.middleware
@@ -81,6 +84,13 @@ async def _main() -> None:
         default=None,
         help="file holding the Pi camera remote-control token (default: "
         "<repo>/.camera-token if it exists; fallback: $PI_CAMERA_TOKEN)",
+    )
+    parser.add_argument(
+        "--camera-tokens-file",
+        type=Path,
+        default=REPO_ROOT / ".camera-tokens",
+        help="YAML `host: token` file for other Pi cameras found by the scan "
+        "(default: <repo>/.camera-tokens; created on first 'Add token')",
     )
     parser.add_argument(
         "--start-vision",
@@ -128,7 +138,18 @@ async def _main() -> None:
     token_file = args.camera_token_file
     if token_file is None and (REPO_ROOT / ".camera-token").is_file():
         token_file = REPO_ROOT / ".camera-token"
-    camera.register(http_app, args.vision_config, vision, camera.load_token(token_file))
+    camera.register(
+        http_app,
+        args.vision_config,
+        vision,
+        camera.load_token(token_file),
+        args.camera_tokens_file,
+    )
+    vision.log_file = LOGS_DIR / "vision_processor.log"
+    camera_log = logs.CameraLogPoller(
+        LOGS_DIR, lambda: camera.camera_base_url(args.vision_config)
+    )
+    logs.register(http_app, LOGS_DIR, camera_log)
     operator.register(
         http_app,
         bus,
@@ -138,6 +159,8 @@ async def _main() -> None:
         img_dir,
         vision,
         field_calibration,
+        LOGS_DIR,
+        camera_log,
     )
 
     http_runner = web.AppRunner(http_app)
@@ -155,9 +178,21 @@ async def _main() -> None:
 
 
 def main() -> None:
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    with contextlib.suppress(OSError):
+        handlers.append(
+            RotatingFileHandler(
+                LOGS_DIR / "wrapper_backend.log",
+                maxBytes=5 * 1024 * 1024,
+                backupCount=1,
+                encoding="utf-8",
+            )
+        )
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        handlers=handlers,
     )
     with contextlib.suppress(KeyboardInterrupt, asyncio.CancelledError):
         asyncio.run(_main())

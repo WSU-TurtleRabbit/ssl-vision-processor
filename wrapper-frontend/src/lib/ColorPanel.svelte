@@ -53,6 +53,59 @@
   } = $props();
 
   let auto = $state<AutoStatus | null>(null);
+  // Manual override: editable reference numbers per colour (Enter saves).
+  let drafts = $state<Record<string, [string, string, string]>>({});
+
+  function draftOf(name: string, reference: unknown): [string, string, string] {
+    const draft = drafts[name];
+    if (draft) return draft;
+    const rgb = asRgb(reference);
+    return rgb
+      ? [
+          String(Math.round(rgb[0])),
+          String(Math.round(rgb[1])),
+          String(Math.round(rgb[2])),
+        ]
+      : ["", "", ""];
+  }
+
+  function draftDirty(name: string, reference: unknown): boolean {
+    const draft = drafts[name];
+    if (!draft) return false;
+    const rgb = asRgb(reference);
+    return (
+      !rgb || draft.some((v, i) => Number(v) !== Math.round(rgb[i] ?? NaN))
+    );
+  }
+
+  function setDraft(
+    name: string,
+    reference: unknown,
+    channel: number,
+    value: string,
+  ): void {
+    const next = [...draftOf(name, reference)] as [string, string, string];
+    next[channel] = value;
+    drafts = { ...drafts, [name]: next };
+  }
+
+  function dropDraft(name: string): void {
+    drafts = Object.fromEntries(
+      Object.entries(drafts).filter(([key]) => key !== name),
+    );
+  }
+
+  async function saveDraft(name: string): Promise<void> {
+    const draft = drafts[name];
+    if (!draft) return;
+    const rgb = draft.map((v) => Math.round(Number(v)));
+    if (rgb.some((c) => !Number.isFinite(c) || c < 0 || c > 255)) {
+      message = { kind: "error", text: `${name}: three numbers 0..255` };
+      return;
+    }
+    await save({ colors: { [name]: rgb } }, `Saved ${name} reference`);
+    if (message?.kind === "ok") dropDraft(name);
+  }
 
   const names = ["orange", "field", "yellow", "blue", "green", "pink"];
   const staleAfterS = 5;
@@ -386,7 +439,36 @@
                   style={`background: ${previewCss(reference)}`}
                   title="Hue preview (brightness removed)"
                 ></span>
-                <code>{formatRgb(reference)}</code>
+                {#each [0, 1, 2] as channel (channel)}
+                  <input
+                    class="channel"
+                    type="number"
+                    min="0"
+                    max="255"
+                    aria-label={`${name} reference channel ${String(channel + 1)}`}
+                    value={draftOf(name, reference)[channel]}
+                    oninput={(event) => {
+                      setDraft(
+                        name,
+                        reference,
+                        channel,
+                        event.currentTarget.value,
+                      );
+                    }}
+                    onkeydown={(event) => {
+                      if (event.key === "Enter") void saveDraft(name);
+                      if (event.key === "Escape") dropDraft(name);
+                    }}
+                  />
+                {/each}
+                {#if draftDirty(name, reference)}
+                  <button
+                    class="primary small"
+                    disabled={saving}
+                    title="Enter"
+                    onclick={() => saveDraft(name)}>Save</button
+                  >
+                {/if}
               </span>
             </td>
             <td class="actions">
@@ -407,19 +489,23 @@
 
   <div class="footer-row">
     <span class="forces">
+      <strong>Auto:</strong>
+      <button
+        class="ghost"
+        disabled={!live || auto?.state === "running"}
+        title="Sample the learned colours for ~5 s while robots are on the field and save the stable ones"
+        onclick={startAuto}
+        >{auto?.state === "running"
+          ? `Sampling... ${String(Math.round((auto.progress ?? 0) * 100))}%`
+          : "Auto-calibrate colours"}</button
+      >
+      &nbsp;<strong>Manual:</strong> edit the Reference numbers (Enter saves) or
+      <em>Pick</em> the colour from the image.
+    </span>
+    <span class="forces">
       reference_force <strong>{forces.reference ?? "--"}</strong>
       &middot; history_force <strong>{forces.history ?? "--"}</strong>
-      &middot; swatches are hue previews
     </span>
-    <button
-      class="ghost"
-      disabled={!live || auto?.state === "running"}
-      title="Sample the learned colours for ~5 s while robots are on the field and save the stable ones"
-      onclick={startAuto}
-      >{auto?.state === "running"
-        ? `Sampling... ${String(Math.round((auto.progress ?? 0) * 100))}%`
-        : "Auto-calibrate colours"}</button
-    >
     {#if confirmSave}
       <span class="confirm">
         Overwrite all six reference colours in the config?
@@ -641,6 +727,23 @@
     flex: 0 0 30px;
     border: 1px solid #8b958f;
     border-radius: 3px;
+  }
+
+  input.channel {
+    width: 3.4em;
+    padding: 1px 3px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font: inherit;
+    font-size: 11px;
+  }
+
+  button.small {
+    height: 22px;
+    padding: 0 6px;
+    font-size: 11px;
   }
 
   .swatch.empty {

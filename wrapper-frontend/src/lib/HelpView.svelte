@@ -1,6 +1,7 @@
 <script lang="ts">
   import DOMPurify from "dompurify";
   import { Marked, type Tokens } from "marked";
+  import { SHORTCUTS } from "./editHistory";
 
   // Help: renders the repo's docs (GET /api/docs/<name>, whitelisted by the
   // backend) as sanitised HTML. Links between docs navigate in-app, ```
@@ -22,6 +23,37 @@
     name: string;
     label: string;
   }
+
+  // Pages that live in the UI itself (not in docs/), appended to the nav.
+  const BUILTIN: Record<string, { label: string; markdown: string }> = {
+    shortcuts: {
+      label: "⌨ Shortcuts",
+      markdown: `# ⌨ Keyboard & mouse shortcuts
+
+In **Set field corners** and **Lens correction** mode (they do not fire while you type in a text field):
+
+| Key / mouse | What it does |
+|---|---|
+${SHORTCUTS.map(([keys, what]) => `| \`${keys}\` | ${what} |`).join("\n")}
+
+Corners mode also has an **Orientation** bar once 4 corners are placed: *Rotate 180°* swaps the goal ends, *corner N → 1* makes another clicked corner the origin (−x, −y). Corner 1 is the origin; x runs along the long side toward the +x goal. A counter-clockwise click order is renumbered clockwise automatically (the calibration only accepts clockwise orders).
+`,
+    },
+    cameras: {
+      label: "📷 Cameras (scan)",
+      markdown: `# 📷 Several Pi cameras
+
+**Services → Scan for cameras...** probes the Jetson's LAN (the /24 of the interface that routes to the configured camera; otherwise every LAN /24, at most 1024 hosts) for the camstream service on port 8080 and on the configured camera's port, and lists what answered: name, host:port, streaming / idle / closed, size, fps.
+
+- **Use this camera** writes \`camera.path\` (\`http://host:port/stream\`) into the vision config, and offers to restart vision_processor right away.
+- **Restart / Open / Close** need the camera's token. The configured camera uses \`.camera-token\`; any other camera needs a line \`host: token\` in \`.camera-tokens\` (both in the repo folder, git-ignored, never shown in the UI). **Add token** writes that line for you (file mode 600).
+- "No token saved for this camera" means exactly that — set it up as described in *Pi camera → 6*.
+- *range...* lets you scan another range (CIDR, /24 .. /32), e.g. \`192.168.1.0/24\` or \`127.0.0.1/32\` for a fake camera on this machine.
+
+**Start capture** (Services → Pi camera) opens the camera on the Pi and starts vision_processor; **Stop capture** stops vision_processor and closes the camera (two-step confirm); **Restart camera** just drops the stream so vision_processor reconnects. Shut down of the Pi is API-only (\`POST /api/camera/shutdown\`).
+`,
+    },
+  };
 
   let html = $state("");
   let error = $state<string | null>(null);
@@ -91,6 +123,8 @@
           .replace(/\.md$/, "");
         items.push({ name: target.name, label });
       }
+      for (const [name, page] of Object.entries(BUILTIN))
+        items.push({ name, label: page.label });
       nav = items;
     } catch {
       // Navigation is optional; the page itself still renders.
@@ -102,14 +136,19 @@
     loading = true;
     error = null;
     try {
-      const response = await fetch(`/api/docs/${encodeURIComponent(docName)}`);
-      if (!response.ok)
-        throw new Error(
-          response.status === 404
-            ? `No document called "${docName}"`
-            : `HTTP ${String(response.status)}`,
+      let markdown = BUILTIN[docName]?.markdown;
+      if (markdown === undefined) {
+        const response = await fetch(
+          `/api/docs/${encodeURIComponent(docName)}`,
         );
-      const markdown = await response.text();
+        if (!response.ok)
+          throw new Error(
+            response.status === 404
+              ? `No document called "${docName}"`
+              : `HTTP ${String(response.status)}`,
+          );
+        markdown = await response.text();
+      }
       const rendered = await marked.parse(markdown);
       if (id !== renderId) return;
       html = DOMPurify.sanitize(rendered);

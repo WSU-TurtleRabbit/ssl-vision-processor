@@ -37,3 +37,8 @@ CMakeCache.txt
 # Pi camera remote-control token (wrapper backend --camera-token-file)
 /.camera-token
 .camera-token
+# Tokens of other Pi cameras (wrapper backend --camera-tokens-file)
+/.camera-tokens
+
+# Runtime logs written by the wrapper backend (wrapper_backend/logs.py)
+/logs/

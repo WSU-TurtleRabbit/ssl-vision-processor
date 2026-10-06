@@ -1,12 +1,21 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import ShortcutLegend from "./ShortcutLegend.svelte";
+  import {
+    History,
+    isTypingTarget,
+    movePoint,
+    nudgeDelta,
+    shortcutOf,
+    toImagePoint,
+  } from "./editHistory";
 
   // Lens correction mode: the user clicks points along physically straight
   // edges (mat seams) in a frozen raw snapshot. vision_processor fits its
   // lens distortion (k2 + principal point) so these become straight again.
   // POST /api/calibration/lens {cam_id, lines}; DELETE removes it.
 
-  type Point = [number, number];
+  import type { Point } from "./editHistory";
 
   const MIN_LINES = 3;
   const MIN_POINTS = 4;
@@ -74,50 +83,161 @@
     return parsed;
   }
 
+  // Undo/redo over whole line lists; the selected point takes arrow keys.
+  const history = new History<Point[][]>();
+  let canUndo = $state(false);
+  let canRedo = $state(false);
+  let selected = $state<[number, number] | null>(null);
+  let drag: { line: number; point: number; start: Point[][] } | null = null;
+  const HIT_PX = 20;
+
+  function syncHistory(): void {
+    canUndo = history.canUndo;
+    canRedo = history.canRedo;
+  }
+
+  function commit(next: Point[][]): void {
+    history.push(lines);
+    lines = next.length > 0 ? next : [[]];
+    fromConfig = false;
+    error = null;
+    confirmRemove = false;
+    syncHistory();
+  }
+
+  function deleteNearest(target: Point): void {
+    let bestLine = -1;
+    let bestPoint = -1;
+    let bestDistance = HIT_PX;
+    for (const [li, line] of lines.entries()) {
+      for (const [pi, point] of line.entries()) {
+        const distance = Math.hypot(point[0] - target[0], point[1] - target[1]);
+        if (distance <= bestDistance) {
+          bestLine = li;
+          bestPoint = pi;
+          bestDistance = distance;
+        }
+      }
+    }
+    if (bestLine < 0) return;
+    const li = bestLine;
+    const pi = bestPoint;
+    commit(
+      lines.map((line, i) =>
+        i === li ? line.filter((_, j) => j !== pi) : line,
+      ),
+    );
+    selected = null;
+  }
+
   function onPointerDown(event: PointerEvent): void {
     if (event.button !== 0 || !svg) return;
     error = null;
     confirmRemove = false;
-    const rect = svg.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    // The SVG covers the image exactly; map CSS px to image px.
-    const x = ((event.clientX - rect.left) / rect.width) * width;
-    const y = ((event.clientY - rect.top) / rect.height) * height;
-    const point: Point = [
-      Math.round(Math.min(width, Math.max(0, x)) * 10) / 10,
-      Math.round(Math.min(height, Math.max(0, y)) * 10) / 10,
-    ];
-    lines = [...lines.slice(0, -1), [...current, point]];
+    const point = toImagePoint(svg, event, width, height);
+    if (!point) return;
+    if (event.ctrlKey || event.metaKey) {
+      deleteNearest(point);
+      event.preventDefault();
+      return;
+    }
+    const target = event.target as Element;
+    const lineAttr = target.getAttribute("data-line");
+    const pointAttr = target.getAttribute("data-point");
+    if (lineAttr !== null && pointAttr !== null) {
+      drag = { line: Number(lineAttr), point: Number(pointAttr), start: lines };
+      selected = [drag.line, drag.point];
+      svg.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
+    let next = lines;
+    if (event.shiftKey && current.length > 0) next = [...lines, []];
+    const last = next.length - 1;
+    const line = next[last] ?? [];
+    commit([...next.slice(0, -1), [...line, point]]);
+    selected = [lines.length - 1, line.length];
+  }
+
+  function onPointerMove(event: PointerEvent): void {
+    if (!drag) return;
+    const point = toImagePoint(svg, event, width, height);
+    if (!point) return;
+    const { line, point: index } = drag;
+    lines = lines.map((l, i) =>
+      i === line ? l.map((p, j) => (j === index ? point : p)) : l,
+    );
     fromConfig = false;
+  }
+
+  function onPointerUp(): void {
+    if (!drag) return;
+    if (drag.start !== lines) {
+      history.push(drag.start);
+      syncHistory();
+    }
+    drag = null;
   }
 
   function nextLine(): void {
     if (current.length === 0) return;
-    lines = [...lines, []];
+    commit([...lines, []]);
   }
 
-  function undoPoint(): void {
+  function undo(): void {
+    const previous = history.undo(lines);
+    if (previous) lines = previous;
+    selected = null;
+    syncHistory();
+  }
+
+  function redo(): void {
+    const next = history.redo(lines);
+    if (next) lines = next;
+    selected = null;
+    syncHistory();
+  }
+
+  function removeLast(): void {
     if (current.length > 0) {
-      lines = [...lines.slice(0, -1), current.slice(0, -1)];
+      commit([...lines.slice(0, -1), current.slice(0, -1)]);
     } else if (lines.length > 1) {
       // Back into the previous line.
       const previous = lines[lines.length - 2] ?? [];
-      lines = [...lines.slice(0, -2), previous.slice(0, -1)];
+      commit([...lines.slice(0, -2), previous.slice(0, -1)]);
     }
+    selected = null;
   }
 
   function deleteLine(): void {
     // Drop the line being drawn, or the previous one if it is empty.
-    lines =
+    commit(
       current.length > 0
         ? [...lines.slice(0, -1), []]
-        : [...lines.slice(0, -2), []];
+        : [...lines.slice(0, -2), []],
+    );
+    selected = null;
   }
 
   function clearAll(): void {
-    lines = [[]];
-    fromConfig = false;
-    error = null;
+    commit([[]]);
+    selected = null;
+  }
+
+  function nudge(event: KeyboardEvent): void {
+    if (!selected) return;
+    const [li, pi] = selected;
+    if (!lines[li]?.[pi]) return;
+    const delta = nudgeDelta(event);
+    commit(
+      lines.map((line, i) =>
+        i === li
+          ? line.map((p, j) =>
+              j === pi ? movePoint(p, delta, width, height) : p,
+            )
+          : line,
+      ),
+    );
   }
 
   async function send(method: "POST" | "DELETE"): Promise<void> {
@@ -149,9 +269,31 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") oncancel();
-    else if (event.key === "Enter") nextLine();
-    else if ((event.ctrlKey || event.metaKey) && event.key === "z") undoPoint();
+    if (isTypingTarget(event)) return;
+    const shortcut = shortcutOf(event);
+    if (shortcut === null) return;
+    event.preventDefault();
+    switch (shortcut) {
+      case "undo":
+        undo();
+        break;
+      case "redo":
+        redo();
+        break;
+      case "escape":
+        oncancel();
+        break;
+      case "removeLast":
+        removeLast();
+        break;
+      case "nudge":
+        nudge(event);
+        break;
+      case "enter":
+        if (current.length > 0) nextLine();
+        else if (ready && !saving && imageUrl) void send("POST");
+        break;
+    }
   }
 
   onMount(() => {
@@ -199,6 +341,7 @@
       Each line needs at least {MIN_POINTS} points; at least {MIN_LINES} lines. Esc
       cancels.
     </p>
+    <ShortcutLegend />
   </div>
 
   <div class="stage">
@@ -219,6 +362,9 @@
         role="application"
         aria-label="Click points along straight edges"
         onpointerdown={onPointerDown}
+        onpointermove={onPointerMove}
+        onpointerup={onPointerUp}
+        onpointercancel={onPointerUp}
       >
         {#each lines as line, index (index)}
           {@const color = COLORS[index % COLORS.length] ?? "#ffd451"}
@@ -230,7 +376,16 @@
             />
           {/if}
           {#each line as point, pointIndex (pointIndex)}
-            <circle cx={point[0]} cy={point[1]} r={radius} fill={color} />
+            <circle
+              data-line={index}
+              data-point={pointIndex}
+              class:selected={selected?.[0] === index &&
+                selected[1] === pointIndex}
+              cx={point[0]}
+              cy={point[1]}
+              r={radius}
+              fill={color}
+            />
           {/each}
           {#if line[0]}
             <text
@@ -267,10 +422,17 @@
       <button class="ghost" disabled={current.length === 0} onclick={nextLine}
         >Next line</button
       >
+      <button class="ghost" disabled={!canUndo} onclick={undo} title="Ctrl+Z"
+        >Undo</button
+      >
+      <button class="ghost" disabled={!canRedo} onclick={redo} title="Ctrl+Y"
+        >Redo</button
+      >
       <button
         class="ghost"
         disabled={current.length === 0 && lines.length < 2}
-        onclick={undoPoint}>Undo point</button
+        onclick={removeLast}
+        title="Backspace">Undo point</button
       >
       <button
         class="ghost"
@@ -367,6 +529,12 @@
     stroke: #111713;
     stroke-width: 1;
     vector-effect: non-scaling-stroke;
+    cursor: grab;
+  }
+
+  circle.selected {
+    stroke: #ffffff;
+    stroke-width: 3;
   }
 
   text {

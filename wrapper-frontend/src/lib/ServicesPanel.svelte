@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import CameraName from "./CameraName.svelte";
+  import CameraScan from "./CameraScan.svelte";
   import type {
     CalibrationHealth,
     HealthServices,
@@ -91,30 +92,78 @@
     null,
   );
 
-  async function cameraAction(command: "restart"): Promise<void> {
+  let confirmStop = $state(false);
+  let showScan = $state(false);
+  let showPiLog = $state(false);
+  let piLogLines = $state<string[]>([]);
+
+  async function refreshPiLog(): Promise<void> {
+    const file = pi?.log_file;
+    if (!file) return;
+    try {
+      const response = await fetch(
+        `/api/logs/${encodeURIComponent(file)}?tail=60`,
+      );
+      if (!response.ok) return;
+      piLogLines = ((await response.json()) as { lines: string[] }).lines;
+    } catch {
+      // The row shows reachability.
+    }
+  }
+
+  async function postJson(url: string): Promise<Record<string, unknown>> {
+    const response = await fetch(url, { method: "POST" });
+    const result = (await response.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
+    if (!response.ok || result["ok"] === false)
+      throw new Error(
+        typeof result["error"] === "string"
+          ? result["error"]
+          : `HTTP ${String(response.status)}`,
+      );
+    return result;
+  }
+
+  // Restart camera: drop the Pi's stream (vision_processor reconnects).
+  // Start capture: open the camera on the Pi, then start vision_processor.
+  // Stop capture: stop vision_processor, then close the camera (the backend
+  // does both for /api/camera/close).
+  async function cameraAction(
+    command: "restart" | "start" | "stop",
+  ): Promise<void> {
+    confirmStop = false;
     cameraBusy = true;
     cameraMessage = null;
     try {
-      const response = await fetch(`/api/camera/${command}`, {
-        method: "POST",
-      });
-      const result = (await response.json().catch(() => ({}))) as {
-        ok?: boolean;
-        error?: string;
-        note?: string;
-        dropped_stream?: boolean;
-      };
-      if (response.ok && result.ok !== false) {
+      if (command === "restart") {
+        const result = await postJson("/api/camera/restart");
         cameraMessage = {
           kind: "ok",
-          text: result.dropped_stream
+          text: result["dropped_stream"]
             ? "Camera stream dropped; vision_processor reconnects."
             : "Camera restarted (no stream was running).",
         };
+      } else if (command === "start") {
+        await postJson("/api/camera/open");
+        if (vision?.running) {
+          cameraMessage = {
+            kind: "ok",
+            text: "Camera open; vision_processor already running.",
+          };
+        } else {
+          const started = await postJson("/api/vision/start");
+          cameraMessage = {
+            kind: "ok",
+            text: `Camera open; vision_processor started (pid ${typeof started["pid"] === "number" ? String(started["pid"]) : "--"}).`,
+          };
+        }
       } else {
+        await postJson("/api/camera/close");
         cameraMessage = {
-          kind: "error",
-          text: result.error ?? `HTTP ${String(response.status)}`,
+          kind: "ok",
+          text: "Capture stopped: vision_processor stopped, camera closed.",
         };
       }
     } catch (error) {
@@ -147,6 +196,7 @@
   onMount(() => {
     const timer = setInterval(() => {
       if (showLog) void refreshLog();
+      if (showPiLog) void refreshPiLog();
     }, 1000);
     return () => {
       clearInterval(timer);
@@ -188,15 +238,73 @@
               ? ""
               : "No token configured on the Pi/backend, see Help → Pi camera → 6"}
           >
-            <!-- Close / Open / Shut down exist as API only (POST
-                 /api/camera/*); the UI offers just Restart. -->
+            {#if confirmStop}
+              <span class="confirm"
+                >Stop vision_processor and close the camera?</span
+              >
+              <button
+                class="danger"
+                disabled={cameraBusy}
+                onclick={() => cameraAction("stop")}>Yes, stop</button
+              >
+              <button class="ghost" onclick={() => (confirmStop = false)}
+                >Cancel</button
+              >
+            {:else}
+              <button
+                class="ghost"
+                disabled={!pi.control ||
+                  cameraBusy ||
+                  (vision?.running === true && !pi.closed)}
+                title="Open the camera on the Pi and start vision_processor"
+                onclick={() => cameraAction("start")}>Start capture</button
+              >
+              <button
+                class="ghost"
+                disabled={!pi.control ||
+                  cameraBusy ||
+                  (vision?.running !== true && !pi.streaming)}
+                title="Stop vision_processor and close the camera (Shut down is API-only)"
+                onclick={() => (confirmStop = true)}>Stop capture</button
+              >
+              <button
+                class="ghost"
+                disabled={!pi.control || cameraBusy}
+                title="Drop the Pi's stream; vision_processor reconnects"
+                onclick={() => cameraAction("restart")}>Restart camera</button
+              >
+            {/if}
             <button
               class="ghost"
-              disabled={!pi.control || cameraBusy}
-              onclick={() => cameraAction("restart")}>Restart camera</button
+              class:active={showPiLog}
+              disabled={!pi.log_file}
+              title={pi.log_file ? `logs/${pi.log_file}` : "no Pi log yet"}
+              onclick={() => {
+                showPiLog = !showPiLog;
+                if (showPiLog) void refreshPiLog();
+              }}>{showPiLog ? "Hide log" : "Show log"}</button
             >
           </span>
         {/if}
+      </div>
+      {#if pi.last_error}
+        <p
+          class="status-line warning"
+          title="Latest failed/error line from the Pi camera service"
+        >
+          Pi: {pi.last_error.text}
+        </p>
+      {/if}
+      {#if showPiLog}
+        <pre class="log">{piLogLines.length
+            ? piLogLines.join("\n")
+            : "(no Pi log lines yet)"}</pre>
+      {/if}
+      <div class="scan-row">
+        <button class="link" onclick={() => (showScan = !showScan)}
+          >{showScan ? "Hide camera scan" : "Scan for cameras..."}</button
+        >
+        {#if showScan}<CameraScan {onchange} />{/if}
       </div>
       {#if cameraMessage}
         <p class={`notice ${cameraMessage.kind}`}>{cameraMessage.text}</p>
@@ -392,6 +500,32 @@
   button.ghost.active {
     color: var(--text);
     border-color: #276f4b;
+  }
+
+  button.danger {
+    color: #ffffff;
+    background: #a8423d;
+    border: 1px solid #a8423d;
+  }
+
+  .confirm {
+    color: var(--bad);
+    font-weight: 600;
+    font-size: 11px;
+  }
+
+  .scan-row {
+    padding: 2px 0 4px 17px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  button.link {
+    height: auto;
+    padding: 2px 0;
+    color: var(--text-muted);
+    background: none;
+    border: 0;
+    text-decoration: underline;
   }
 
   .status-line {

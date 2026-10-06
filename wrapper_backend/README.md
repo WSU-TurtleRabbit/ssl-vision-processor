@@ -24,6 +24,9 @@ Python application that owns the field geometry and (eventually) the browser-bas
   `<repo>/.camera-token` if it exists, git-ignored; whitespace stripped;
   fallback: env `PI_CAMERA_TOKEN`). Never logged. Set it up as in
   `pi_camera/README.md` section 6.
+- `--camera-tokens-file PATH` — YAML `host: token` lines for *other* Pi
+  cameras found by the scan (default `<repo>/.camera-tokens`, git-ignored,
+  written with mode 600 by "Add token"). Never logged or returned.
 - `--vision-cwd DIR` — default: the directory of `--vision-config`.
   `vision_processor` resolves `img/` and `bot_heights_file` relative to its
   cwd, and the backend reads snapshots from `<vision-config dir>/img`, so both
@@ -141,6 +144,35 @@ Each file is one module. In rough "outside-in" order:
   in the vision config (1-40 of `A-Za-z0-9 _-`, `""` removes it; the C++
   ignores the key). `/api/health` reports `camera_name`, and the `pi_camera`
   entry includes `closed`/`control` from the Pi's `/status`.
+  Several cameras: `GET /api/cameras/scan[?subnet=CIDR]` probes the LAN /24
+  of the interface routing to the configured camera host (fallback: all
+  non-loopback IPv4 /24s, point-to-point /32s skipped, at most 1024 hosts)
+  for camstream `/status` on port 8080 and the configured camera's port
+  (0.5 s timeout, 64 in flight) and returns `{host, port, streaming, client,
+  closed, control, size, fps, name_if_known, has_token, is_current}`;
+  `subnet` (/24 .. /32) overrides the range, e.g. `127.0.0.1/32` to find a
+  fake camera on this machine. `POST /api/cameras/token {host, token}` stores
+  a token in the tokens file; `POST /api/cameras/use {host, port, restart}`
+  writes `camera.path` (`http://host:port/stream`) and optionally restarts
+  vision_processor; `POST /api/cameras/control {host, port, command}` sends
+  restart/open/close/shutdown to any camera with a known token (the single
+  `.camera-token` applies to the configured camera only).
+- **`logs.py`** — `<repo>/logs/` (git-ignored): `wrapper_backend.log` (the
+  backend's own logging, also on stderr), `vision_processor.log` (stdout +
+  stderr of the supervised vision_processor, `---- started <time> ----` per
+  run) and `pi-camera-<host>.log` (the Pi service's `GET /log?since=N`,
+  polled every 3 s while `camera.path` is http(s); lines are
+  `<ISO time> <text>`). Each file rotates to `.1` above 5 MB. `GET /api/logs`
+  lists them, `GET /api/logs/<name>?tail=200` returns the last lines,
+  `?raw=1` the file as text/plain; only basenames present in the directory
+  are served. `/api/health` carries `logs_dir`, the `pi_camera` entry
+  `log_file` / `last_error` (newest failed/error line, only if newer than
+  the last "camera ON") and `vision_processor.last_warning` is only reported
+  for the current run and while newer than its last status line.
+- `POST /api/config/debug-interval {"interval_ms": N}` — sets
+  `debug.debug_stream_interval_ms` (snapshot refresh rate; 0 = off) in the
+  vision config, comment-preserving; vision_processor reloads it live. Used
+  by the pop-out camera window (`/popout?cam=0&view=raw`, served like `/`).
 - **`yamledit.py`** — the comment-preserving, line-based YAML section editor
   (with atomic write) used by `colors.py` and `calibration.py`.
 - **`operator.py`** — `GET /api/config`, `GET /api/health` (services: Pi

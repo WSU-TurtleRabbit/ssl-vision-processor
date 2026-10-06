@@ -10,6 +10,9 @@ export interface PiCameraHealth {
   fps?: number | string | null;
   closed?: boolean;
   control?: boolean;
+  log_file?: string | null;
+  last_error?: { text: string; at: number } | null;
+  last_line?: { text: string; at: number } | null;
   error?: string;
 }
 

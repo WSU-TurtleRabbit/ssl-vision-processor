@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import time
 from pathlib import Path
@@ -16,6 +17,8 @@ from yarl import URL
 
 from wrapper_backend.bus import Bus
 from wrapper_backend.camera import camera_name
+from wrapper_backend.logs import CameraLogPoller
+from wrapper_backend.yamledit import YamlEditError, atomic_write, update_section
 from wrapper_backend.calibration import FieldCalibration, config_cam_id, read_config
 from wrapper_backend.supervisor import VisionSupervisor, scan_vision_processors
 
@@ -69,6 +72,8 @@ def register(
     img_dir: Path,
     supervisor: VisionSupervisor,
     calibration: FieldCalibration,
+    logs_dir: Path | None = None,
+    camera_log: CameraLogPoller | None = None,
 ) -> None:
     started_at = time.monotonic()
     pi_cache: dict[str, Any] = {"at": 0.0, "url": None, "status": None}
@@ -131,6 +136,12 @@ def register(
     def vision_status() -> dict[str, Any]:
         instances = scan_vision_processors()
         status = supervisor.status()
+        # A warning is only shown while it is newer than the last status line
+        # of the same run (the supervisor resets it on every start).
+        warning = status.get("last_warning")
+        last_status = status.get("last_status")
+        if warning and last_status and last_status["at"] > warning["at"]:
+            status["last_warning"] = None
         return {
             **status,
             "config": status["config_path"],
@@ -157,6 +168,15 @@ def register(
         services: dict[str, Any] = {}
         pi_camera = await pi_camera_status(request.app)
         if pi_camera is not None:
+            if camera_log is not None:
+                err = camera_log.last_error
+                pi_camera["last_error"] = (
+                    err if err and err["at"] >= camera_log.last_on_at else None
+                )
+                pi_camera["last_line"] = camera_log.last_line
+                pi_camera["log_file"] = (
+                    camera_log.file.name if camera_log.file is not None else None
+                )
             services["pi_camera"] = pi_camera
         services["vision_processor"] = vision_status()
         name = camera_name(vision_config)
@@ -185,6 +205,7 @@ def register(
                 "geometry_config": str(geometry_config),
                 "cam_id": cam_id,
                 "camera_name": camera_name(vision_config),
+                "logs_dir": str(logs_dir) if logs_dir is not None else None,
                 "snapshot_count": len(images),
                 "latest_snapshot_age_s": (
                     round(time.time() - latest_image, 1) if latest_image else None
@@ -218,6 +239,49 @@ def register(
         return web.FileResponse(path)
 
     http_app.router.add_get("/", index_handler)
+    http_app.router.add_get("/popout", index_handler)
+
+    debug_lock = asyncio.Lock()
+
+    async def debug_interval_handler(request: web.Request) -> web.Response:
+        """``POST /api/config/debug-interval {"interval_ms": N}`` (0 = off).
+
+        Sets ``debug.debug_stream_interval_ms`` in the vision config
+        (comment-preserving); vision_processor reloads tunables live.
+        """
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return web.json_response({"error": "body must be JSON"}, status=400)
+        value = body.get("interval_ms") if isinstance(body, dict) else None
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= 60000
+        ):
+            return web.json_response(
+                {"error": "interval_ms must be an integer 0..60000"}, status=400
+            )
+        async with debug_lock:
+            try:
+                original = vision_config.read_text(encoding="utf-8")
+                updated = update_section(
+                    original, "debug", {"debug_stream_interval_ms": str(value)}
+                )
+                parsed = yaml.safe_load(updated) or {}
+                debug = parsed.get("debug") if isinstance(parsed, dict) else None
+                if (
+                    not isinstance(debug, dict)
+                    or debug.get("debug_stream_interval_ms") != value
+                ):
+                    raise YamlEditError("edited config does not round-trip")
+                if updated != original:
+                    atomic_write(vision_config, updated)
+            except (OSError, yaml.YAMLError, YamlEditError) as exc:
+                return web.json_response({"error": str(exc)}, status=500)
+        return web.json_response({"interval_ms": value})
+
+    http_app.router.add_post("/api/config/debug-interval", debug_interval_handler)
     http_app.router.add_get("/assets/{path:.+}", asset_handler)
     http_app.on_startup.append(start_watcher)
     http_app.on_cleanup.append(stop_watcher)

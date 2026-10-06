@@ -1,5 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import ShortcutLegend from "./ShortcutLegend.svelte";
+  import {
+    History,
+    isTypingTarget,
+    movePoint,
+    nearestIndex,
+    nudgeDelta,
+    shortcutOf,
+    toImagePoint,
+  } from "./editHistory";
 
   // Field corners mode: calibrate the camera from four clicked corners
   // instead of white field lines. Shows a frozen raw snapshot, collects 4
@@ -11,7 +21,8 @@
   // clicked outer_line_corners) and refinement: false into the vision
   // config and restarts vision_processor so it recalibrates.
 
-  type Point = [number, number];
+  import type { Point } from "./editHistory";
+
   type Mode = "outer" | "field";
 
   let {
@@ -66,6 +77,23 @@
       : null,
   );
   let markerRadius = $derived(Math.max(5, width / 110));
+  // Orientation checks: side 1→2 should be the short side (field_width),
+  // side 2→3 the long side (field_length), as the C++ maps them.
+  let orientationWarning = $derived.by(() => {
+    if (!ordered || !convex || fieldLength <= fieldWidth) return null;
+    const side = (a: Point | undefined, b: Point | undefined): number =>
+      a && b ? Math.hypot(a[0] - b[0], a[1] - b[1]) : 0;
+    const short =
+      (side(ordered[0], ordered[1]) + side(ordered[2], ordered[3])) / 2;
+    const long =
+      (side(ordered[1], ordered[2]) + side(ordered[3], ordered[0])) / 2;
+    return short > long * 1.15
+      ? "field_length would run along the short side of the rectangle — check field_length/field_width, or make the next corner the origin."
+      : null;
+  });
+  let reorderedNotice = $state<string | null>(null);
+  // Field quadrant of each corner in the saved (clockwise) order.
+  const QUADRANT = ["−x −y", "−x +y", "+x +y", "+x −y"];
   let fontSize = $derived(Math.max(11, width / 55));
 
   function parseCorners(value: unknown): Point[] | null {
@@ -181,50 +209,84 @@
     });
   }
 
-  function toImage(event: PointerEvent): Point | null {
-    if (!svg) return null;
-    const rect = svg.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    // The SVG covers the image exactly; map CSS px to image px.
-    const x = ((event.clientX - rect.left) / rect.width) * width;
-    const y = ((event.clientY - rect.top) / rect.height) * height;
-    return [
-      Math.round(Math.min(width, Math.max(0, x)) * 10) / 10,
-      Math.round(Math.min(height, Math.max(0, y)) * 10) / 10,
-    ];
+  // Undo/redo over whole point lists; the selected point takes arrow keys.
+  const history = new History<Point[]>();
+  let canUndo = $state(false);
+  let canRedo = $state(false);
+  let selected = $state<number | null>(null);
+  let dragStart: Point[] | null = null;
+  const HIT_PX = 20;
+
+  function syncHistory(): void {
+    canUndo = history.canUndo;
+    canRedo = history.canRedo;
+  }
+
+  function commit(next: Point[]): void {
+    history.push(points);
+    points = next;
+    fromConfig = false;
+    error = null;
+    syncHistory();
   }
 
   function normalise(): void {
     // Renumber 2..4 clockwise once all four are placed, so the labels match
-    // what will be saved.
+    // what will be saved (the C++ only accepts clockwise orders).
     if (points.length === 4) {
       const next = orderCorners(points);
-      if (isConvex(next)) points = next;
+      if (isConvex(next)) {
+        const changed = next.some((p, i) => p !== points[i]);
+        if (changed)
+          reorderedNotice =
+            "Your click order was counter-clockwise; corners 2–4 were renumbered clockwise as the calibration requires.";
+        points = next;
+      }
     }
+  }
+
+  // Orientation: corner 1 is the origin; rotate which clicked corner is #1.
+  function rotateOrigin(steps: number): void {
+    if (points.length !== 4) return;
+    const shift = ((steps % 4) + 4) % 4;
+    commit([...points.slice(shift), ...points.slice(0, shift)]);
+    selected = null;
+    reorderedNotice = null;
   }
 
   function onPointerDown(event: PointerEvent): void {
     if (event.button !== 0) return;
     error = null;
+    const point = toImagePoint(svg, event, width, height);
+    if (!point) return;
+    if (event.ctrlKey || event.metaKey) {
+      const index = nearestIndex(points, point, HIT_PX);
+      if (index >= 0) {
+        commit(points.filter((_, i) => i !== index));
+        selected = null;
+      }
+      event.preventDefault();
+      return;
+    }
     const target = event.target as Element;
     const index = target.getAttribute("data-index");
     if (index !== null) {
       dragIndex = Number(index);
+      selected = dragIndex;
+      dragStart = points;
       svg?.setPointerCapture(event.pointerId);
       event.preventDefault();
       return;
     }
     if (points.length >= 4) return;
-    const point = toImage(event);
-    if (!point) return;
-    points = [...points, point];
-    fromConfig = false;
+    commit([...points, point]);
+    selected = points.length - 1;
     normalise();
   }
 
   function onPointerMove(event: PointerEvent): void {
     if (dragIndex === null) return;
-    const point = toImage(event);
+    const point = toImagePoint(svg, event, width, height);
     if (!point) return;
     points = points.map((p, i) => (i === dragIndex ? point : p));
     fromConfig = false;
@@ -232,19 +294,50 @@
 
   function onPointerUp(): void {
     if (dragIndex === null) return;
+    if (dragStart && dragStart !== points) {
+      history.push(dragStart);
+      syncHistory();
+    }
     dragIndex = null;
+    dragStart = null;
     normalise();
   }
 
   function undo(): void {
-    points = points.slice(0, -1);
-    error = null;
+    const previous = history.undo(points);
+    if (previous) points = previous;
+    selected = null;
+    syncHistory();
+  }
+
+  function redo(): void {
+    const next = history.redo(points);
+    if (next) points = next;
+    selected = null;
+    syncHistory();
+  }
+
+  function removeLast(): void {
+    if (points.length === 0) return;
+    commit(points.slice(0, -1));
+    selected = null;
   }
 
   function reset(): void {
-    points = [];
-    fromConfig = false;
-    error = null;
+    if (points.length === 0) return;
+    commit([]);
+    selected = null;
+  }
+
+  function nudge(event: KeyboardEvent): void {
+    if (selected === null || !points[selected]) return;
+    const index = selected;
+    const delta = nudgeDelta(event);
+    commit(
+      points.map((p, i) =>
+        i === index ? movePoint(p, delta, width, height) : p,
+      ),
+    );
   }
 
   async function save(): Promise<void> {
@@ -275,8 +368,30 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") oncancel();
-    else if ((event.ctrlKey || event.metaKey) && event.key === "z") undo();
+    if (isTypingTarget(event)) return;
+    const shortcut = shortcutOf(event);
+    if (shortcut === null) return;
+    event.preventDefault();
+    switch (shortcut) {
+      case "undo":
+        undo();
+        break;
+      case "redo":
+        redo();
+        break;
+      case "escape":
+        oncancel();
+        break;
+      case "removeLast":
+        removeLast();
+        break;
+      case "nudge":
+        nudge(event);
+        break;
+      case "enter":
+        if (convex && !saving && imageUrl) void save();
+        break;
+    }
   }
 
   function midpoint(a: Point | undefined, b: Point | undefined): Point | null {
@@ -350,6 +465,14 @@
         directly</label
       >
     </div>
+    <p>
+      <strong
+        >Corner 1 is the origin (−x,−y); x runs along the long side toward the
+        +x goal. Rotate 180° to swap the goals.</strong
+      >
+      The camera angle does not matter — the calibration solves tilt and rotation
+      itself; only the corner order fixes the field's coordinate frame.
+    </p>
     <ol>
       <li>
         Click <strong>corner 1</strong>: the corner on the origin side, i.e.
@@ -380,6 +503,7 @@
       The clicked rectangle must really have that size, otherwise the scale is wrong
       and robots are not recognised. Drag a marker to adjust it; Esc cancels.
     </p>
+    <ShortcutLegend />
   </div>
 
   <div class="stage">
@@ -437,6 +561,7 @@
           <circle
             data-index={index}
             class:origin={index === 0}
+            class:selected={index === selected}
             cx={point[0]}
             cy={point[1]}
             r={markerRadius}
@@ -449,7 +574,9 @@
               ? point[1] + markerRadius * 3
               : point[1] - markerRadius * 1.4}
             font-size={fontSize}
-            >{index + 1}{index === 0 ? " (−x, −y side)" : ""}</text
+            >{index + 1} · {QUADRANT[index] ?? ""}{index === 0
+              ? " (origin)"
+              : ""}</text
           >
         {/each}
       </svg>
@@ -459,6 +586,43 @@
       <p class="message">Loading camera {camId} raw snapshot...</p>
     {/if}
   </div>
+
+  {#if points.length === 4}
+    <div class="bar orientation">
+      <span class="hint"><strong>Orientation:</strong></span>
+      <button
+        class="ghost"
+        onclick={() => {
+          rotateOrigin(2);
+        }}
+        title="Swap the goal ends">Rotate 180°</button
+      >
+      <span class="hint"
+        >Origin corner (−x −y) is #1 · make another corner the origin:</span
+      >
+      {#each [1, 2, 3] as step (step)}
+        <button
+          class="ghost"
+          onclick={() => {
+            rotateOrigin(step);
+          }}>corner {step + 1} ({QUADRANT[step]}) → 1</button
+        >
+      {/each}
+      <span class="hint">
+        {#each points as point, index (index)}
+          {index + 1}·{QUADRANT[index]} ({point[0]}, {point[1]}){index < 3
+            ? " · "
+            : ""}
+        {/each}
+      </span>
+      {#if orientationWarning}
+        <span class="hint warn">{orientationWarning}</span>
+      {/if}
+      {#if reorderedNotice}
+        <span class="hint warn">{reorderedNotice}</span>
+      {/if}
+    </div>
+  {/if}
 
   <div class="bar">
     <span class="hint">
@@ -473,16 +637,20 @@
       {/if}
     </span>
     <span class="buttons">
-      <button class="ghost" disabled={points.length === 0} onclick={undo}
+      <button class="ghost" disabled={!canUndo} onclick={undo} title="Ctrl+Z"
         >Undo</button
+      >
+      <button class="ghost" disabled={!canRedo} onclick={redo} title="Ctrl+Y"
+        >Redo</button
       >
       <button class="ghost" disabled={points.length === 0} onclick={reset}
         >Reset</button
       >
-      <button class="ghost" onclick={oncancel}>Cancel</button>
+      <button class="ghost" onclick={oncancel} title="Esc">Cancel</button>
       <button
         class="primary"
         disabled={!convex || saving || !imageUrl}
+        title="Enter"
         onclick={save}>{saving ? "Saving..." : "Save corners"}</button
       >
     </span>
@@ -589,6 +757,11 @@
     cursor: grab;
   }
 
+  circle.selected {
+    stroke: #ffffff;
+    stroke-width: 3;
+  }
+
   circle.origin {
     fill: #ff5b55;
   }
@@ -630,6 +803,14 @@
 
   .hint {
     color: var(--text-muted);
+  }
+
+  .hint.warn {
+    color: var(--warn);
+  }
+
+  .bar.orientation {
+    background: var(--surface-2);
   }
 
   .buttons {

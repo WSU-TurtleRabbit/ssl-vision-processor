@@ -35,6 +35,8 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
+from wrapper_backend.logs import append_lines
+
 log = logging.getLogger("wrapper_backend.supervisor")
 
 VISION_PROCESSOR = "vision_processor"
@@ -145,6 +147,9 @@ class VisionSupervisor:
         self.retry_attempts = 0
         self._retry_round = 0
         self._retry_next_at: float | None = None
+        self.camera_wait_reason = "Pi not reachable"
+        # Optional file that receives the child's stdout+stderr (logs/).
+        self.log_file: Path | None = None
         # Returns the camera's /status URL (http(s) cameras) or None; set by
         # __main__ so the supervisor can wait for the Pi before retrying.
         self.camera_status_url: Callable[[], str | None] | None = None
@@ -184,7 +189,7 @@ class VisionSupervisor:
             return "running (started by hand)"
         if self.want_running:
             if self.retry_state == "waiting_for_camera":
-                return "waiting for camera (Pi not reachable)"
+                return f"waiting for camera ({self.camera_wait_reason})"
             n = self.retry_attempts
             return f"restarting ({n} attempt{'' if n == 1 else 's'})"
         return "stopped"
@@ -263,6 +268,14 @@ class VisionSupervisor:
         self._proc = proc
         self._started_at = time.monotonic()
         self.last_status = None
+        self.last_warning = None  # warnings belong to one run only
+        if self.log_file is not None:
+            append_lines(
+                self.log_file,
+                [
+                    f"---- started {time.strftime('%Y-%m-%dT%H:%M:%S%z')} pid {proc.pid} ----"
+                ],
+            )
         self.note(f"started {self.binary.name} {self.config} (pid {proc.pid})")
         self._monitor = asyncio.create_task(
             self._watch(proc), name="vision-supervisor-watch"
@@ -275,6 +288,8 @@ class VisionSupervisor:
                 return
             line = raw.decode(errors="replace").rstrip("\n")
             self._log.append(line)
+            if self.log_file is not None:
+                append_lines(self.log_file, [line])
             if is_stderr:
                 self.last_warning = {"line": line, "at": time.time()}
             elif "] status: " in line:
@@ -317,7 +332,11 @@ class VisionSupervisor:
         return RETRY_DELAYS_S[min(self._retry_round, len(RETRY_DELAYS_S) - 1)]
 
     async def _camera_reachable(self) -> bool | None:
-        """True/False for an http(s) camera's /status, None for other cameras."""
+        """True/False for an http(s) camera's /status, None for other cameras.
+
+        A camera that answers but is ``closed`` by the operator counts as not
+        ready too (vision_processor would only get 503 from ``/stream``).
+        """
         url = self.camera_status_url() if self.camera_status_url else None
         if url is None:
             return None
@@ -326,9 +345,17 @@ class VisionSupervisor:
                 async with session.get(
                     url, timeout=aiohttp.ClientTimeout(total=CAMERA_PROBE_TIMEOUT_S)
                 ) as response:
-                    return response.status == 200
-        except (aiohttp.ClientError, TimeoutError):
+                    if response.status != 200:
+                        self.camera_wait_reason = "Pi not reachable"
+                        return False
+                    data = await response.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            self.camera_wait_reason = "Pi not reachable"
             return False
+        if isinstance(data, dict) and data.get("closed"):
+            self.camera_wait_reason = "camera closed by operator"
+            return False
+        return True
 
     async def _retry_loop(self) -> None:
         """Retry forever (2 s, 5 s, then every 10 s) while want_running.
@@ -348,7 +375,7 @@ class VisionSupervisor:
                     if await self._camera_reachable() is False:
                         if self.retry_state != "waiting_for_camera":
                             self.note(
-                                "waiting for camera (Pi not reachable); "
+                                f"waiting for camera ({self.camera_wait_reason}); "
                                 "retrying while it is away"
                             )
                         self.retry_state = "waiting_for_camera"

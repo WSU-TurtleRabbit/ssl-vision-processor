@@ -16,11 +16,20 @@
     refinement,
     refreshToken,
     onchange,
+    modal = false,
+    onedit,
+    onclose,
   }: {
     camId: number;
     refinement: boolean;
     refreshToken: number;
     onchange: () => void;
+    /** Modal mode: always editing, "Save & exit" also recalibrates. */
+    modal?: boolean;
+    /** Inline mode: opens the modal. */
+    onedit?: () => void;
+    /** Modal mode: closes it, with a toast when something happened. */
+    onclose?: (toast: { kind: "ok" | "error"; text: string } | null) => void;
   } = $props();
 
   const fieldKeys: [string, string][] = [
@@ -45,7 +54,8 @@
   let loaded = $state<GeometryResponse | null>(null);
   let field = $state<Record<string, number>>({});
   let lines = $state<Record<string, boolean>>({});
-  let editing = $state(false);
+  let editingState = $state(false);
+  let editing = $derived(modal || editingState);
   let saving = $state(false);
   let message = $state<{ kind: "ok" | "error"; text: string } | null>(null);
   let sizeChanged = $state(false);
@@ -102,7 +112,7 @@
       const response = await fetch("/api/geometry");
       if (!response.ok) return;
       loaded = (await response.json()) as GeometryResponse;
-      if (!editing) {
+      if (!editing || Object.keys(field).length === 0) {
         field = { ...loaded.field };
         lines = { ...loaded.optional_field_lines };
       }
@@ -156,13 +166,51 @@
         text:
           typeof result["message"] === "string" ? result["message"] : "Saved.",
       };
-      editing = false;
+      editingState = false;
       await load();
       onchange();
     } catch (error) {
       message = { kind: "error", text: String(error) };
     } finally {
       saving = false;
+    }
+  }
+
+  // Modal: save + publish, then clear the calibration so vision_processor
+  // picks the new size up, then close with a toast.
+  async function saveAndExit(): Promise<void> {
+    if (problem || !dirty) {
+      onclose?.(dirty ? null : { kind: "ok", text: "Nothing changed." });
+      return;
+    }
+    saving = true;
+    try {
+      const saved = await post("/api/geometry", {
+        field,
+        optional_field_lines: lines,
+      });
+      let text = messageOf(saved, "Saved and published.");
+      try {
+        const recal = await post("/api/calibration/recalibrate", {
+          cam_id: camId,
+        });
+        text += ` ${messageOf(recal, "Recalibrating.")}`;
+      } catch (caught) {
+        text += ` Recalibration failed: ${String(caught)}`;
+      }
+      onchange();
+      onclose?.({ kind: "ok", text });
+    } catch (caught) {
+      message = { kind: "error", text: String(caught) };
+    } finally {
+      saving = false;
+    }
+  }
+
+  function onKeydown(event: KeyboardEvent): void {
+    if (modal && event.key === "Escape") {
+      event.preventDefault();
+      onclose?.(null);
     }
   }
 
@@ -235,15 +283,28 @@
   });
 </script>
 
-<section class="geometry">
+<svelte:window onkeydown={onKeydown} />
+
+<section class="geometry" class:modal>
   <div class="section-heading">
-    <h2>Field geometry</h2>
-    {#if editing}
+    <h2>{modal ? "Edit field dimensions" : "Field geometry"}</h2>
+    {#if modal}
+      <span class="buttons">
+        <button class="ghost" disabled={saving} onclick={() => onclose?.(null)}
+          >Cancel</button
+        >
+        <button
+          class="primary"
+          disabled={problem !== null || saving}
+          onclick={saveAndExit}>{saving ? "Saving..." : "Save & exit"}</button
+        >
+      </span>
+    {:else if editing}
       <span class="buttons">
         <button
           class="ghost"
           onclick={() => {
-            editing = false;
+            editingState = false;
             if (loaded) {
               field = { ...loaded.field };
               lines = { ...loaded.optional_field_lines };
@@ -257,7 +318,13 @@
         >
       </span>
     {:else}
-      <button class="ghost" onclick={() => (editing = true)}>Edit</button>
+      <button
+        class="primary"
+        onclick={() => {
+          if (onedit) onedit();
+          else editingState = true;
+        }}>Edit field dimensions</button
+      >
     {/if}
   </div>
 
@@ -362,39 +429,42 @@
     </p>
   {/if}
 
-  <div class="refine">
-    <label class="check">
-      <input
-        type="checkbox"
-        checked={refinementDraft ?? refinement}
-        onchange={(event) => (refinementDraft = event.currentTarget.checked)}
-      />
-      Refine with field lines (needs visible lines/tape)
-    </label>
-    <p>
-      Off (default): the calibration uses only the 4 clicked corners. On:
-      vision_processor also fits the camera to white lines it sees — only useful
-      when real field lines are visible, otherwise clutter makes it worse.
-    </p>
-    {#if refinementDraft !== null && refinementDraft !== refinement}
-      <span class="buttons">
-        <button
-          class="primary"
-          disabled={saving}
-          onclick={() => saveRefinement(true)}
-          >Save & restart vision_processor</button
-        >
-        <button
-          class="ghost"
-          disabled={saving}
-          onclick={() => saveRefinement(false)}>Save only</button
-        >
-        <button class="ghost" onclick={() => (refinementDraft = null)}
-          >Cancel</button
-        >
-      </span>
-    {/if}
-  </div>
+  {#if !modal}
+    <div class="refine">
+      <label class="check">
+        <input
+          type="checkbox"
+          checked={refinementDraft ?? refinement}
+          onchange={(event) => (refinementDraft = event.currentTarget.checked)}
+        />
+        Refine with field lines (needs visible lines/tape)
+      </label>
+      <p>
+        Off (default): the calibration uses only the 4 clicked corners. On:
+        vision_processor also fits the camera to white lines it sees — only
+        useful when real field lines are visible, otherwise clutter makes it
+        worse.
+      </p>
+      {#if refinementDraft !== null && refinementDraft !== refinement}
+        <span class="buttons">
+          <button
+            class="primary"
+            disabled={saving}
+            onclick={() => saveRefinement(true)}
+            >Save & restart vision_processor</button
+          >
+          <button
+            class="ghost"
+            disabled={saving}
+            onclick={() => saveRefinement(false)}>Save only</button
+          >
+          <button class="ghost" onclick={() => (refinementDraft = null)}
+            >Cancel</button
+          >
+        </span>
+      {/if}
+    </div>
+  {/if}
 
   {#if message}
     <p class={`notice ${message.kind}`}>{message.text}</p>
@@ -422,6 +492,14 @@
     margin: 0;
     font-size: 13px;
     font-weight: 700;
+  }
+
+  .geometry.modal {
+    border: 0;
+  }
+
+  .geometry.modal .preview {
+    max-height: 260px;
   }
 
   .preview {

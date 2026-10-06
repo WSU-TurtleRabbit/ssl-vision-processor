@@ -100,6 +100,49 @@ npm run dev
   in-app doc links, copy buttons on code blocks, mermaid diagrams (mermaid is
   a separate lazy chunk, themed light/dark). Navigation mirrors
   `docs/README.md`. The red "🚨 Panic" header button opens `panic.md`.
+- `src/lib/editHistory.ts` + `ShortcutLegend.svelte` — undo/redo stack and
+  the shortcuts shared by the corners and lens modes: Ctrl+Z / Ctrl+Y
+  (Ctrl+Shift+Z), Enter (lens: next line; save when complete), Esc,
+  Backspace/Delete (remove last point), Shift+click (new line, lens),
+  Ctrl+click (delete nearest point), drag to move, arrow keys nudge the
+  selected point (Shift: 5 px). Shortcuts are ignored while typing in a
+  field; the legend is shown in both mode banners and in Help → Shortcuts.
+  Corners mode has an Orientation bar (Rotate 180°, choose the origin
+  corner, warning when field_length would map onto the short side) and the
+  overlay draws the +x/+y axes, "goal −x/+x" and the origin corner.
+- `src/lib/CameraScan.svelte` — "Scan for cameras..." (Services): lists
+  camstream Pis from `GET /api/cameras/scan`, "Use this camera" (with or
+  without a vision_processor restart), Restart/Open/Close for cameras with a
+  saved token, inline "Add token" (`POST /api/cameras/token`), and a range
+  override (`?subnet=`). The Pi camera row has Start capture (open + start
+  vision_processor), Stop capture (two-step: stop vision_processor + close)
+  and Restart camera. Help → Cameras explains it.
+- Field dimensions: "Edit field dimensions" opens `GeometryEditor` as a modal
+  (Esc cancels); "Save & exit" writes + publishes the geometry, triggers
+  `POST /api/calibration/recalibrate` and shows a toast.
+- Colours: the Reference column is editable (three numbers, Enter saves via
+  `POST /api/colors/save`, Esc reverts) next to Pick and Auto-calibrate.
+- `src/lib/overlay.ts` — the camera-image overlay (field outline/markings
+  through the published calibration incl. lens distortion, +x/+y axes,
+  "goal −x/+x", origin corner, saved corners labelled 1·−x −y … 4·+x −y,
+  lens lines, live robots/balls), shared by the operator page and the
+  pop-out window.
+- `src/lib/PopoutView.svelte` — `/popout?cam=0&view=raw` (header "Pop out"
+  opens it in its own window): only the camera image on a dark background
+  with view selector, overlay on/off, snapshot rate 1/2/5/10 Hz
+  (`POST /api/config/debug-interval`) and a "Raw Pi stream" link that is only
+  offered while vision_processor is stopped (the Pi has a single viewer).
+- `src/lib/LogDrawer.svelte` + `LogsView.svelte` — the log console: a
+  right-edge drawer (header "Logs" or the `key, 380 px, state remembered)
+with a merged live tail of`vision_processor.log`, `pi-camera-<host>.log`and`wrapper_backend.log`(source checkboxes, WARN amber / error red,
+pause, clear, copy, "open file");`#/logs/<file>`is the single-file tail
+view (auto-refresh 2 s, pause, copy, download via`?raw=1`) and shows the
+  folder on the Jetson. The Services Pi camera row has "Show log" and shows
+  the latest failed/error line of the Pi (current camera run only).
+- Header: the mode buttons (corners, lens, field dimensions) are icon-only
+  with tooltips (inline SVG in `Icon.svelte`); the connection badge reads
+  "Live data: connected / reconnecting… / disconnected"; FPS and Frame chips
+  explain what they measure in their tooltips.
 - `src/lib/CameraName.svelte` — camera name ("Camera <id>" when unset) with
   inline rename (✎, Enter saves via `POST /api/camera/name`, Esc cancels);
   shown in the header, the Services Pi row, Performance and the
