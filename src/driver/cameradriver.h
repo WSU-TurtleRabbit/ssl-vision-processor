@@ -17,7 +17,7 @@
 
 #include <memory>
 #include <yaml-cpp/node/node.h>
-#include "opencl.h"
+#include "compute.h"
 
 extern double realTimeOffset;
 double getRealTime();

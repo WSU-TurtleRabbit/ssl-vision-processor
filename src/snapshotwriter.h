@@ -22,7 +22,7 @@
 #include <string>
 #include <thread>
 
-#include "opencl.h"
+#include "compute.h"
 
 
 class SnapshotWriter {

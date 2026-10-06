@@ -21,7 +21,7 @@
 #include <condition_variable>
 #include <thread>
 
-#include "opencl.h"
+#include "compute.h"
 
 
 typedef struct AVCodec AVCodec;
