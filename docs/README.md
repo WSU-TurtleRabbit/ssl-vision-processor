@@ -17,6 +17,7 @@ There are two setups. They share the software, but start, stop and fix different
 | 🛠️ One-time setup | [pi/setup.md](pi/setup.md) | [zed/setup.md](zed/setup.md) |
 | 📷 Camera settings | [../pi_camera/README.md](../pi_camera/README.md) | [zed/camera.md](zed/camera.md) |
 | 🧭 Decisions (why it is this way) | not written yet | [zed/decisions.md](zed/decisions.md) |
+| 📊 Benchmarks (measured numbers) | not written yet | [zed/benchmarks.md](zed/benchmarks.md) |
 
 **Not sure which?** Run `hostname` in the terminal. `GTW-ONX-…` is the ZED Box.
 

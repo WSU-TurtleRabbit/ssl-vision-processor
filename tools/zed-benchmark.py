@@ -183,16 +183,19 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("/tmp") / f"zed-benchmark-{time.strftime('%Y%m%d-%H%M%S')}")
     parser.add_argument("--only", nargs="*", help="variant names to run (default: all)")
     parser.add_argument("--sweep", action="store_true", help="run the output-size sweep 768x432 .. 1280x720 instead")
+    parser.add_argument("--repeat", type=int, default=1, help="rounds; the order rotates each round so warm-up and drift don't always hit the same variant")
     args = parser.parse_args()
     # -f: the process name is truncated to 15 characters ("vision_processo"), so -x never matches
     if subprocess.run(["pgrep", "-f", "/vision_processor( |$)"], capture_output=True).returncode == 0:
         raise SystemExit("A vision_processor is running and holds the camera. Stop it first (Services panel or Ctrl+C).")
+    chosen = [(n, v) for n, v in (SWEEP if args.sweep else VARIANTS).items() if not args.only or n in args.only]
     results = []
-    for name, variant in (SWEEP if args.sweep else VARIANTS).items():
-        if args.only and name not in args.only:
-            continue
-        print(f"running {name} for {args.seconds} s ...", flush=True)
-        results.append(run_variant(name, variant, args.seconds, args.out))
+    for round_index in range(args.repeat):
+        order = chosen[round_index % len(chosen):] + chosen[: round_index % len(chosen)]
+        for name, variant in order:
+            print(f"round {round_index + 1}/{args.repeat}: running {name} for {args.seconds} s ...", flush=True)
+            result = run_variant(name, variant, args.seconds, args.out / f"round{round_index + 1}")
+            results.append({**result, "round": round_index + 1})
     (args.out / "results.json").write_text(json.dumps(results, indent=2))
 
     print("\n| variant | det/s | ms/frame | CPU % | robots/frame | robot conf | ball % | ball conf | ball jitter mm | latency ms | max gap ms |")
@@ -202,6 +205,15 @@ def main() -> None:
             print(f"| {r['name']} | {r['error']} |" + " |" * 9)
             continue
         print(f"| {r['name']} | {r['detections_per_s']:.1f} | {r['ms_per_frame']:.1f} | {r['cpu_percent']:.0f} | {r['robots_per_frame']:.2f} | {r['robot_confidence']:.3f} | {r['ball_percent']:.1f} | {r['ball_confidence']:.3f} | {r['ball_jitter_mm']:.1f} | {r['latency_ms']:.1f} | {r['max_gap_ms']:.0f} |")
+    if args.repeat > 1:
+        keys = ["detections_per_s", "ms_per_frame", "cpu_percent", "robot_confidence", "ball_percent", "latency_ms"]
+        print(f"\nmean over {args.repeat} rounds (min-max):")
+        print("| variant | " + " | ".join(keys) + " |")
+        print("|---|" + "---|" * len(keys))
+        for name, _ in chosen:
+            runs = [r for r in results if r["name"] == name and "error" not in r]
+            cells = [f"{statistics.mean(r[k] for r in runs):.2f} ({min(r[k] for r in runs):.2f}-{max(r[k] for r in runs):.2f})" for k in keys] if runs else ["error"] * len(keys)
+            print(f"| {name} | " + " | ".join(cells) + " |")
     print(f"\nraw results: {args.out / 'results.json'}")
 
 

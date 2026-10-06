@@ -158,7 +158,8 @@ def validate_corners(raw: Any, width: int, height: int) -> list[Point]:
 
 
 def _format_point(point: Point) -> str:
-    return f"[{point[0]:.1f}, {point[1]:.1f}]"
+    # 3 decimals: corners are rescaled when the quality preset changes, 0.1 px would drift
+    return f"[{round(point[0], 3)}, {round(point[1], 3)}]"
 
 
 def solve_linear(matrix: list[list[float]], rhs: list[float]) -> list[float]:
@@ -349,6 +350,22 @@ def write_geometry(
     return True
 
 
+def write_camera(config_path: Path, values: dict[str, str]) -> bool:
+    """Set scalar keys of the config's ``camera:`` section (values as YAML text); True if changed."""
+    original = config_path.read_text(encoding="utf-8")
+    updated = update_section(original, "camera", values)
+    parsed = yaml.safe_load(updated) or {}
+    camera = parsed.get("camera") if isinstance(parsed, dict) else None
+    if not isinstance(camera, dict) or any(
+        camera.get(k) != yaml.safe_load(v) for k, v in values.items()
+    ):
+        raise YamlEditError("edited config does not round-trip")
+    if updated == original:
+        return False
+    atomic_write(config_path, updated)
+    return True
+
+
 def read_config(config_path: Path) -> dict[str, Any]:
     try:
         parsed = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
@@ -360,6 +377,37 @@ def read_config(config_path: Path) -> dict[str, Any]:
 def config_cam_id(config_path: Path) -> int:
     value = read_config(config_path).get("cam_id", 0)
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+QUALITY_PIXEL_KEYS = ("line_corners", "outer_line_corners")
+
+
+class QualityError(ValueError):
+    pass
+
+
+def quality_presets(camera: Any) -> dict[str, tuple[int, int]]:
+    """``camera.quality_presets`` ({name: [width, height]}) of a vision config, {} if absent/invalid."""
+    raw = camera.get("quality_presets") if isinstance(camera, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    presets: dict[str, tuple[int, int]] = {}
+    for name, size in raw.items():
+        if (
+            isinstance(name, str)
+            and isinstance(size, list)
+            and len(size) == 2
+            and all(
+                isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in size
+            )
+        ):
+            presets[name] = (size[0], size[1])
+    return presets
+
+
+def _scale(points: list[Point], factor: float) -> list[Point]:
+    # Rounded like _format_point writes them, so write_geometry's round-trip check holds
+    return [(round(p[0] * factor, 3), round(p[1] * factor, 3)) for p in points]
 
 
 class FieldCalibration:
@@ -508,11 +556,24 @@ class FieldCalibration:
         return values, remove
 
     async def _apply(
-        self, cam_id: int, values: dict[str, Any], remove: list[str], what: str
+        self,
+        cam_id: int,
+        values: dict[str, Any],
+        remove: list[str],
+        what: str,
+        camera_values: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Write the config, then stop -> clear calibs + broadcast -> start."""
         async with self._lock:
-            changed = write_geometry(self._config, values, remove)
+            original = self._config.read_text(encoding="utf-8")
+            try:
+                changed = write_geometry(self._config, values, remove)
+                if camera_values:
+                    changed = write_camera(self._config, camera_values) or changed
+            except Exception:
+                # All or nothing: a size change without its rescaled corners would break calibration
+                atomic_write(self._config, original)
+                raise
             sup = self._supervisor.status()
             restart = sup["running"] or sup["want_running"]
             camera_ids = set(self._geometry.calibrated_cameras()) | {cam_id}
@@ -581,6 +642,62 @@ class FieldCalibration:
             ),
             "reordered": clicked != given,
         }
+
+    def quality(self) -> dict[str, Any]:
+        camera = read_config(self._config).get("camera")
+        camera = camera if isinstance(camera, dict) else {}
+        presets = quality_presets(camera)
+        current = camera.get("quality")
+        return {
+            "presets": {name: [w, h] for name, (w, h) in presets.items()},
+            "current": current if current in presets else None,
+            "size": [camera.get("output_width"), camera.get("output_height")],
+        }
+
+    async def set_quality(self, cam_id: int, name: Any) -> dict[str, Any]:
+        """Switch ``camera.output_width/height`` to a preset, rescaling the pixel geometry
+        (corners, lens lines) so the calibration stays valid, then clear calibs + restart."""
+        camera = read_config(self._config).get("camera")
+        camera = camera if isinstance(camera, dict) else {}
+        presets = quality_presets(camera)
+        if not presets:
+            raise QualityError("this camera config has no camera.quality_presets")
+        if not isinstance(name, str) or name not in presets:
+            raise QualityError(f"'quality' must be one of {sorted(presets)}")
+        width, height = presets[name]
+        old_width, old_height = camera.get("output_width"), camera.get("output_height")
+        if (
+            not isinstance(old_width, int)
+            or not isinstance(old_height, int)
+            or old_width <= 0
+            or old_height <= 0
+        ):
+            raise QualityError(
+                "camera.output_width/output_height must be set to scale the corners"
+            )
+        factor = width / old_width
+        if abs(height / old_height - factor) > 0.01:
+            raise QualityError(
+                f"{width}x{height} has a different aspect ratio from {old_width}x{old_height}; "
+                "corners can't be rescaled, click them again instead"
+            )
+        geometry_cfg = self._geometry_cfg()
+        values: dict[str, Any] = {}
+        for key in QUALITY_PIXEL_KEYS:
+            points = _points(geometry_cfg.get(key), 4)
+            if points is not None:
+                values[key] = _scale(points, factor)
+        lines = _lines(geometry_cfg.get("distortion_lines"))
+        if lines is not None:
+            values["distortion_lines"] = [_scale(line, factor) for line in lines]
+        result = await self._apply(
+            cam_id,
+            values,
+            [],
+            "quality",
+            {"quality": name, "output_width": str(width), "output_height": str(height)},
+        )
+        return {**result, "quality": name, "size": [width, height]}
 
     async def recalibrate(self, cam_id: int) -> dict[str, Any]:
         """Clear the calibs and restart vision_processor (config unchanged)."""
@@ -743,6 +860,34 @@ def register(http_app: web.Application, calibration: FieldCalibration) -> None:
             return web.json_response({"error": str(exc)}, status=500)
         return web.json_response(result)
 
+    async def quality_get_handler(_: web.Request) -> web.Response:
+        return web.json_response(calibration.quality())
+
+    async def quality_post_handler(request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or not set(body) <= {"cam_id", "quality"}:
+                raise QualityError('expected {"quality": "<preset name>", "cam_id": N}')
+            result = await calibration.set_quality(
+                _cam_id(body.get("cam_id", 0)), body.get("quality")
+            )
+        except (
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            QualityError,
+            CornerError,
+        ) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except SupervisorError as exc:
+            return web.json_response(
+                {"error": f"saved, but restarting failed: {exc}"}, status=exc.status
+            )
+        except (OSError, yaml.YAMLError, YamlEditError) as exc:
+            return web.json_response({"error": str(exc)}, status=500)
+        return web.json_response(result)
+
+    http_app.router.add_get("/api/camera/quality", quality_get_handler)
+    http_app.router.add_post("/api/camera/quality", quality_post_handler)
     http_app.router.add_post("/api/calibration/recalibrate", recalibrate_handler)
     http_app.router.add_post("/api/calibration/refinement", refinement_handler)
     http_app.router.add_get("/api/calibration", status_handler)

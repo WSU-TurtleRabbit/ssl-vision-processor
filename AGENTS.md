@@ -19,7 +19,7 @@ This fork runs on **two setups**. Keep each setup's things together and named af
 
 - **Lower case, words joined by `-`.** No spaces, no dates in active file names.
 - **No backup copies next to the real file** (`*.bak`, `*.before-*`, `*-old.yml`). Git keeps history. Commit before experimenting, or put the copy in `archive/`.
-- **Experiments and measurements** go in a scratch folder outside the repo. Only the result goes in, as a comment in the config or a line in `docs/<setup>/decisions.md`.
+- **Experiments** run in a scratch folder outside the repo. **Results** go in: a table in `docs/<setup>/benchmarks.md`, raw data as `docs/<setup>/benchmark-data/<yyyy-mm-dd>-<what>.json`, and the choice it led to in `docs/<setup>/decisions.md`.
 - **Legacy names, not renamed yet:** `config-pi-cam.yml` (would be `pi-config-event.yml`) and `geometry-wrapper-lab-divB.yml` (the lab field). They're used on the AGX, so rename them only together with someone who can test there.
 - **`docs/pi/camera.md` must not be created.** The web page's Help already uses the name `pi-camera` for `pi_camera/README.md`.
 

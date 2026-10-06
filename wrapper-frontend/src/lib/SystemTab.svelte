@@ -59,6 +59,54 @@
     }
   }
 
+  // Processing-size presets (camera.quality_presets in the vision config). Switching
+  // rescales the field corners and restarts vision_processor (POST /api/camera/quality).
+  const QUALITY_HINTS: Record<string, string> = {
+    low: "lowest delay and CPU, for unattended running",
+    medium: "a bit more robot confidence",
+    max: "most confident, ~25 % more CPU",
+  };
+  let quality = $state<{
+    presets: Record<string, [number, number]>;
+    current: string | null;
+  } | null>(null);
+
+  async function refreshQuality(): Promise<void> {
+    try {
+      const response = await fetch("/api/camera/quality");
+      if (response.ok) quality = (await response.json()) as typeof quality;
+    } catch {
+      // Optional: the row stays hidden without presets.
+    }
+  }
+
+  async function setQuality(name: string): Promise<void> {
+    busy = `quality-${name}`;
+    try {
+      const response = await fetch("/api/camera/quality", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quality: name }),
+      });
+      const result = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+      };
+      if (!response.ok)
+        throw new Error(result.error ?? `HTTP ${String(response.status)}`);
+      ontoast({
+        kind: "ok",
+        text: `Quality: ${name}. ${result.message ?? ""}`,
+      });
+    } catch (error) {
+      ontoast({ kind: "error", text: String(error) });
+    } finally {
+      busy = null;
+      await refreshQuality();
+      onchange();
+    }
+  }
+
   async function refreshLog(): Promise<void> {
     try {
       const response = await fetch("/api/vision/log");
@@ -79,6 +127,7 @@
   }
 
   onMount(() => {
+    void refreshQuality();
     const timer = setInterval(() => {
       if (showLog) void refreshLog();
     }, 2000);
@@ -155,6 +204,21 @@
         >
       </span>
     </p>
+    {#if quality && Object.keys(quality.presets).length > 0}
+      <p class="row">
+        <strong>Quality</strong>
+        <span class="buttons">
+          {#each Object.entries(quality.presets) as [name, [w, h]] (name)}
+            <button
+              class:active={quality.current === name}
+              title={`${String(w)}×${String(h)}: ${QUALITY_HINTS[name] ?? ""}. Switching restarts vision_processor.`}
+              disabled={!reachable || busy !== null || quality.current === name}
+              onclick={() => setQuality(name)}>{name} · {w}×{h}</button
+            >
+          {/each}
+        </span>
+      </p>
+    {/if}
     {#if vision?.last_status && vision.running}
       <p class="sub">{vision.last_status.line}</p>
     {/if}

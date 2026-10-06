@@ -7,7 +7,8 @@ What we decided, why, and what would make us look again. Newest first. **Before 
 | Date | Decision | Status |
 |---|---|---|
 | 2026-10-06 | [One camera: use only the ZED's left lens, not "2 cameras"](#one-camera-not-two) | ✅ decided |
-| 2026-10-06 | [60 fps at 768×432](#60-fps-at-768432) | ✅ in use |
+| 2026-10-06 | [Quality presets: 832×468 by default, 896×504 and 1216×684 on demand](#quality-presets) | ✅ in use |
+| 2026-10-06 | [60 fps](#60-fps-at-768432) | ✅ in use |
 | 2026-10-06 | [Read the ZED with the ZED SDK, not as a webcam](#zed-sdk-instead-of-webcam-mode) | ✅ in use |
 | 2026-10-06 | [Automatic exposure and white balance, with adapting colours](#automatic-exposure-with-adapting-colours) | ✅ in use |
 | 2026-10-06 | [Raw (unrectified) picture](#raw-unrectified-picture) | ✅ in use |
@@ -37,9 +38,19 @@ What we decided, why, and what would make us look again. Newest first. **Before 
 - The backend and web page handle one camera only.
 - One ZED covers the whole lab field, so there's no need yet.
 
+## Quality presets
+
+**Decision:** three processing sizes, switched in the web page. `low` 832×468 is the default, because the system mostly runs unattended. `medium` is 896×504 and `max` is 1216×684.
+
+**Why:** the 2026-10-06 sweep ([benchmarks.md](benchmarks.md)). Every size up to 1216×684 holds 60 fps; 832×468 had the lowest delay (3.4 ms) and CPU (66 %), and 1216×684 the highest robot confidence (0.82). 1280×720 dropped below 60 fps, so it isn't offered.
+
+**How:** one config file, `camera.quality_presets`, not three files: three copies of the corners and colours would drift apart. Switching rescales the pixel corners (exact, because the sensor mode doesn't change), clears the calibration and restarts `vision_processor` (`/api/camera/quality`).
+
+**Look again if:** repeat runs or a moving-ball test reorder the sizes. Each size was measured once, on a still scene.
+
 ## 60 fps at 768×432
 
-**Decision:** `fps: 60`, `output_width: 768`, `output_height: 432`, sensor mode 1280×720.
+**Decision:** `fps: 60`, sensor mode 1280×720. This was first measured at 768×432; the size is now set by the [quality presets](#quality-presets).
 
 **Why:** twice the detections and less delay than 30 fps, with the same quality. A bigger picture (1280×720) couldn't keep 60 fps and was less confident. Full table: [camera.md → Frame rate and resolution](camera.md#frame-rate-and-resolution).
 
