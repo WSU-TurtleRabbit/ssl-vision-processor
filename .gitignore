@@ -33,3 +33,7 @@ CMakeCache.txt
 /.cache
 /build*
 /.zed
+
+# Pi camera remote-control token (wrapper backend --camera-token-file)
+/.camera-token
+.camera-token

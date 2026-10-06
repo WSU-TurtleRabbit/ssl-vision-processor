@@ -1,0 +1,36 @@
+optional_field_lines:
+  goal2goal: false
+  halfway: false
+  centercircle: false
+  penalty: false
+
+# Event field geometry: foam-mat setup without white lines (the permanent lab field stays in geometry-wrapper-lab-divB.yml).
+# Foam-mat area 2800 x 1550 mm (measured 2026-10-06, after the move) = field + 150 mm boundary on every side.
+# The 4 mat corners are clicked in the UI ("Set field corners"); the field corners are derived from them.
+field:
+  field_length: 2500
+  field_width: 1250
+  # TODO placeholders scaled to fit the small lab field; set them to the real goals/markings.
+  goal_width: 600
+  goal_depth: 180
+  goal_height: 160
+  penalty_area_depth: 450
+  penalty_area_width: 900
+  goal_center_to_penalty_mark: 900
+  boundary_width: 150
+  boundary_width_goal_line: 150
+  center_circle_radius: 300
+  line_thickness: 10
+  ball_radius: 21.5
+  max_robot_radius: 90.0
+  goal_substitution_area_width: 0
+
+models:
+  straight_two_phase:
+    acc_slide: -3.40
+    acc_roll: -0.45
+    k_switch: 0.64
+  chip_fixed_loss:
+    damping_xy_first_hop: 0.55
+    damping_xy_other_hops: 0.88
+    damping_z: 0.54
