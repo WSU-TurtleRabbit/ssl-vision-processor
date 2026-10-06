@@ -39,7 +39,7 @@ The swatches show the colour's hue only (brightness is removed), so they may loo
 | Ball not found | Pick the orange from the image (panel → **Pick** → orange) |
 | Markers look white on the camera picture | Too bright: lower exposure or gain. 📷 [on the Pi](../pi_camera/README.md#5-adjusting-camera-settings) · 🎥 [ZED settings](zed-box/camera.md) |
 | Everything flickers when clouds pass | Use manual exposure, so the camera doesn't keep re-adjusting. 📷 on the Pi · 🎥 `exposure:` in `config-zed-lab.yml` |
-| Panel says "not publishing" | `vision_processor` isn't running, or is an old build: `make -j12 -C build vision_processor`, then restart it |
+| Panel says "not publishing" | `vision_processor` isn't running, or is an old build: `make -j6 -C build vision_processor`, then restart it |
 
 The highest allowed `reference_force` is `0.5 − history_force / 2`: 0.1 on the 📷 Pi camera (history 0.8), 0.15 on the 🎥 ZED Box (history 0.7).
 

@@ -52,7 +52,7 @@ flowchart TD
     B -->|"KeyError: 'optional_field_lines'"| B2["Old-format field file →<br/>📷 geometry-event.yml<br/>🎥 geometry-wrapper-lab-divB.yml"]
     B -->|"uv: command not found"| B3["Prefix: PATH=$HOME/.local/bin:$PATH"]
     B -->|"address already in use :8765"| B4["Already running:<br/>ss -ltnp | grep 8765"]
-    B -->|"Runs, no detections in UI"| B5["vision_processor running?<br/>ip route get 224.5.23.2 → eno1"]
+    B -->|"Runs, no detections in UI"| B5["vision_processor running?<br/>ip route get 224.5.23.2<br/>📷 → eno1 · 🎥 → eth0"]
 ```
 
 ## Frontend
@@ -60,7 +60,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     A["Open the web page<br/>📷 192.168.210.222 · 🎥 192.168.210.130"] --> B{"What happens?"}
-    B -->|"Connection refused"| B1["npm run dev not running?<br/>ss -ltn | grep 5173"]
+    B -->|"Connection refused"| B1["Backend running?<br/>ss -ltn | grep 8765<br/>📷 dev server: npm run dev on 5173"]
     B -->|"npm: not found / engine error"| B2["Prefix: PATH=$HOME/.local/node/bin:$PATH"]
     B -->|"Page says 'disconnected'"| B3["Backend down → start it"]
     B -->|":8765 says 'frontend is not built'"| B4["cd wrapper-frontend && npm run build"]

@@ -29,7 +29,7 @@ flowchart LR
 4. **Check:** the robot count goes above 0 and the drawn field outline sits on the mats. If it doesn't, click the corners again.
 
 **Good to know:**
-- **Mat edge versus field.** You click the mat edge. The backend works out the field inside it, 150 mm in from each edge.
+- **Mat edge versus field.** You click the mat edge. The backend works out the field inside it, `boundary_width` in from each edge (📷 event mats: 150 mm · 🎥 lab field: 300 mm).
 - **Saving clears the old calibration.** The backend remembers the last calibration, and a restarted `vision_processor` would reuse it. Restarting by hand does **not** pick up new corners, so use the **Save** button.
 - **The lens bending is not corrected yet.** The wide lens bends straight lines, so positions near the picture edges are a bit less accurate than in the middle. Field lines fix this later (below).
 - **Clicking accuracy matters.** A few pixels off at a corner means a few centimetres off on the field.

@@ -50,7 +50,7 @@ flowchart LR
 | Backend | after changing the field file (`geometry-*.yml`) | Ctrl+C, then step 1 again |
 | Web page | rarely, if it looks stuck | reload the browser (Ctrl+Shift+R) |
 
-**No restart needed** for the `color:`, `thresholds:`, `tracking:` and `debug:` sections of `config-zed-lab.yml`. They reload by themselves within half a second.
+**No restart needed** for `color:`, `tracking:` and most of `thresholds:` and `debug:` in `config-zed-lab.yml`. They reload by themselves within half a second. The exceptions need a **Restart**: `thresholds: blobs`, `geometry_tolerance`, and `debug: wait_for_geometry`, `ground_truth`.
 
 ## Only one program can use the ZED
 
@@ -64,4 +64,4 @@ make -j6 -C build vision_processor
 
 Then **Restart** `vision_processor` in the Services panel.
 
-Camera settings (fps, exposure, colours of the image): [📷 camera.md](camera.md) · Something not working? → [🚨 panic.md](panic.md)
+Camera settings (fps, exposure, colours of the image): [🎥 camera.md](camera.md) · Something not working? → [🚨 panic.md](panic.md)

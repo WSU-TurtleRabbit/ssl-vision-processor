@@ -13,11 +13,12 @@ The image work runs on the **GPU with CUDA** wherever CUDA is installed. The fir
 
 | | 🎥 ZED Box (Orin NX, measured 2026-10-06) | 📷 Pi camera Jetson (AGX Orin) |
 |---|---|---|
-| Image work | GPU (CUDA) | GPU if built with CUDA, otherwise CPU (PoCL) |
+| Image work | GPU (CUDA) | GPU if built with CUDA, otherwise CPU (PoCL, 12 cores) |
 | Time per frame | about **4 ms** | CUDA: about 3 ms · CPU: about 31–45 ms |
 | Frames per second | **60** (the camera's limit at 720p) | camera-limited with CUDA · 25–30 with CPU |
 | Camera → network delay | about 2.7 ms | not measured |
 | CPU use | about 0.7 of one core (out of 8) | not measured |
+| Decoding the camera video | done by the ZED SDK | about 8 ms per 1080p frame (not the bottleneck) |
 
 The AGX numbers come from `cuda/NOTES.md` (one recorded video, 768×432).
 

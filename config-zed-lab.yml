@@ -1,5 +1,5 @@
 # Lab field config for the StereoLabs ZED Box (Orin NX) with its ZED 2i, read through the ZED SDK
-# (driver ZED, needs a CUDA build with the SDK, see docs/setup-jetson.md). Exposure, gain and white
+# (driver ZED, needs a CUDA build with the SDK, see docs/zed-box/setup.md). Exposure, gain and white
 # balance are automatic, so the colour references below adapt (reference/history force 0.10/0.70).
 cam_id: 0
 bot_heights_file: robot-heights.yml

@@ -1,6 +1,6 @@
 [🏠 Home](../README.md) · [🚨 PANIC](panic.md) · [▶️ Start / Stop](start-stop.md) · 🎥 ZED Box
 
-# 📷 ZED camera settings
+# 🎥 ZED camera settings
 
 All settings are in the `camera:` section of **`config-zed-lab.yml`**. After changing them, **Restart** `vision_processor` in the Services panel.
 

@@ -19,7 +19,7 @@ flowchart LR
 
 | # | What | Command | Done when you see |
 |---|---|---|---|
-| 0 | Pi camera | nothing to do: it starts when the Pi boots. Check: `curl http://192.168.210.149:8080/status` | `{"streaming": false, ...}` |
+| 0 | Pi camera | nothing to do: it starts when the Pi boots. Check: `curl http://192.168.210.149:8080/status` (`.149` is the Pi's Ethernet, use this; `.150` is its Wi-Fi) | `{"streaming": false, ...}` |
 | 1 | Backend **+ vision_processor** | `PATH=$HOME/.local/bin:$PATH ./start_wrapper.sh geometry-event.yml --vision-config config-pi-cam.yml --start-vision` | it keeps running; the Pi says `"streaming": true` |
 | 2 | Web page | `cd wrapper-frontend && PATH=$HOME/.local/node/bin:$PATH npm run dev` | `Local: http://localhost:5173` |
 | 3 | Browser | open `http://192.168.210.222:5173` (Tailscale: `http://100.84.89.60:5173`) | the page with the camera picture |
