@@ -13,6 +13,7 @@
      See the License for the specific language governing permissions and
      limitations under the License.
  */
+#include <algorithm>
 #include <yaml-cpp/yaml.h>
 #include <sys/stat.h>
 #include "log.h"
@@ -98,6 +99,9 @@ Resources::Resources(const std::string& configPath) : fieldReference(), configPa
 	cameraAmount = geometry["camera_amount"].as<int>(1);
 	cameraHeight = geometry["camera_height"].as<double>(0.0);
 	lineCorners = geometry["line_corners"].as<std::vector<Eigen::Vector2f>>(std::vector<Eigen::Vector2f>());
+	lineCornersIncludeBoundary = geometry["line_corners_include_boundary"].as<bool>(false);
+	distortionLines = geometry["distortion_lines"].as<std::vector<std::vector<Eigen::Vector2f>>>(std::vector<std::vector<Eigen::Vector2f>>());
+	distortionLines.erase(std::remove_if(distortionLines.begin(), distortionLines.end(), [](const auto& l) { return l.size() < 3; }), distortionLines.end());
 	geometryRefinement = geometry["refinement"].as<bool>(true);
 	fieldLineThreshold = geometry["field_line_threshold"].as<int>(5);
 	minLineSegmentLength = geometry["min_line_segment_length"].as<double>(10.0);

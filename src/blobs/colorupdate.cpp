@@ -2,6 +2,9 @@
 #include "kmeans.h"
 #include "pattern.h"
 
+#include <cstdio>
+#include <fstream>
+
 
 static float sqPointLineSegmentDistance(const SSL_FieldLineSegment& line, const Eigen::Vector2f& point) {
 	//Adapted from Grumdrig https://stackoverflow.com/a/1501725 CC BY-SA 4.0
@@ -117,4 +120,40 @@ void updateColors(Resources& r, const std::list<std::unique_ptr<BotHypothesis>>&
 	}
 
 	determineFieldLineBlobColor(r, ballCandidates);
+}
+
+static void writeColor(std::ostream& out, const char* name, const Eigen::Vector3i& color, bool last = false) {
+	out << "\"" << name << "\": [" << color.x() << ", " << color.y() << ", " << color.z() << "]" << (last ? "" : ", ");
+}
+
+void writeColorsJson(const Resources& r, const std::string& path) {
+	const std::string tmpPath = path + ".tmp";
+	{
+		std::ofstream out(tmpPath);
+		if(!out) {
+			WARN("open failed: " << tmpPath);
+			return;
+		}
+
+		out << "{\n  \"cam_id\": " << r.camId << ",\n  \"learned\": {";
+		writeColor(out, "orange", r.orange);
+		writeColor(out, "field", r.field);
+		writeColor(out, "yellow", r.yellow);
+		writeColor(out, "blue", r.blue);
+		writeColor(out, "green", r.green);
+		writeColor(out, "pink", r.pink);
+		writeColor(out, "field_line", r.fieldLineColor, true);
+		out << "},\n  \"reference\": {";
+		writeColor(out, "orange", r.orangeReference);
+		writeColor(out, "field", r.fieldReference);
+		writeColor(out, "yellow", r.yellowReference);
+		writeColor(out, "blue", r.blueReference);
+		writeColor(out, "green", r.greenReference);
+		writeColor(out, "pink", r.pinkReference, true);
+		out << "},\n  \"reference_force\": " << r.referenceForce << ",\n  \"history_force\": " << r.historyForce << "\n}\n";
+	}
+	if(std::rename(tmpPath.c_str(), path.c_str()) != 0) {
+		WARN("rename failed: " << tmpPath << " -> " << path);
+		std::remove(tmpPath.c_str());
+	}
 }

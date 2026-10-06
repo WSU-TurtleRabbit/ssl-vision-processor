@@ -362,7 +362,7 @@ struct PointGeometryFit : public Eigen::DenseFunctor<float> {
 	explicit PointGeometryFit(const Resources& r, const std::vector<Eigen::Vector2f>& imageCorners, const std::vector<std::vector<Eigen::Vector2f>>& mergedPixels, const CameraModel& model, const bool calibHeight, const bool calibDistortion): imageCorners(imageCorners), mergedPixels(mergedPixels), reference(model), calibHeight(calibHeight), calibDistortion(calibDistortion) {
 		Eigen::Vector2f extentMin;
 		Eigen::Vector2f extentMax;
-		visibleFieldExtent(r, false, extentMin, extentMax);
+		visibleFieldExtent(r, r.lineCornersIncludeBoundary, extentMin, extentMax);
 		modelCorners.push_back(extentMin);
 		modelCorners.emplace_back(extentMin.x(), extentMax.y());
 		modelCorners.push_back(extentMax);
@@ -417,7 +417,13 @@ static bool cornerCalibration(const Resources& r, const std::vector<std::vector<
 		CameraModel model = basicModel;
 
 		for(int i = 0; i < 10; i++) {
-			calibrateDistortion(mergedPixels, model);
+			// Without field line refinement the merged "lines" can be arbitrary clutter (e.g. carpet edges
+			// around the field), which yields a bogus distortion/principal point. Use manually clicked
+			// straight edges instead if available, otherwise keep the undistorted default model.
+			if(r.geometryRefinement)
+				calibrateDistortion(mergedPixels, model);
+			else if(!r.distortionLines.empty())
+				calibrateDistortion(r.distortionLines, model);
 
 			PointGeometryFit functor(r, edges, mergedPixels, model, calibHeight, false); //calibDistortion
 			Eigen::NumericalDiff<PointGeometryFit> numDiff(functor);

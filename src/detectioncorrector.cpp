@@ -23,8 +23,9 @@
 #include "log.h"
 
 
-DetectionCorrector::DetectionCorrector(std::vector<Eigen::Vector2f> lineCorners, const float cameraHeight):
+DetectionCorrector::DetectionCorrector(std::vector<Eigen::Vector2f> lineCorners, const bool cornersIncludeBoundary, const float cameraHeight):
 		lineCorners(std::move(lineCorners)),
+		cornersIncludeBoundary(cornersIncludeBoundary),
 		configuredCameraHeight(cameraHeight) {}
 
 void DetectionCorrector::update(const Perspective& perspective) {
@@ -37,8 +38,9 @@ void DetectionCorrector::update(const Perspective& perspective) {
 	if(lineCorners.size() != 4 || !perspective.field.has_field_length() || !perspective.field.has_field_width())
 		return;
 
-	const float halfLength = perspective.field.field_length() / 2.0f;
-	const float halfWidth = perspective.field.field_width() / 2.0f;
+	// The corners either mark the field itself or the outer edge of the boundary area around it
+	const float halfLength = perspective.field.field_length() / 2.0f + (cornersIncludeBoundary ? goalBoundaryWidth(perspective.field) : 0.0f);
+	const float halfWidth = perspective.field.field_width() / 2.0f + (cornersIncludeBoundary ? (float)perspective.field.boundary_width() : 0.0f);
 	const cv::Point2f imageCorners[] = {
 		{lineCorners[0].x(), lineCorners[0].y()},
 		{lineCorners[1].x(), lineCorners[1].y()},

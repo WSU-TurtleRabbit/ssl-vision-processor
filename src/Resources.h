@@ -79,6 +79,8 @@ public:
 	int cameraAmount;
 	double cameraHeight; // Just for calibration, do not use elsewhere (0.0 as special value for automatic calibration)
 	std::vector<Eigen::Vector2f> lineCorners;
+	bool lineCornersIncludeBoundary; // line_corners are the outer corners of field + boundary
+	std::vector<std::vector<Eigen::Vector2f>> distortionLines; // Clicked points along straight edges for lens distortion
 	bool geometryRefinement;
 	uint8_t fieldLineThreshold;
 	double minLineSegmentLength;

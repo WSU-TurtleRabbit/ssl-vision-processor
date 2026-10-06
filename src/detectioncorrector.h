@@ -24,7 +24,7 @@
 
 class DetectionCorrector {
 public:
-	DetectionCorrector(std::vector<Eigen::Vector2f> lineCorners, float cameraHeight);
+	DetectionCorrector(std::vector<Eigen::Vector2f> lineCorners, bool cornersIncludeBoundary, float cameraHeight);
 
 	void update(const Perspective& perspective);
 	void correct(SSL_DetectionFrame* detection, const Perspective& perspective) const;
@@ -37,6 +37,7 @@ private:
 	[[nodiscard]] Eigen::Vector2f project(const cv::Mat& transform, const Eigen::Vector2f& point) const;
 
 	const std::vector<Eigen::Vector2f> lineCorners;
+	const bool cornersIncludeBoundary;
 	const float configuredCameraHeight;
 	cv::Mat imageToFieldTransform;
 	cv::Mat fieldToImageTransform;

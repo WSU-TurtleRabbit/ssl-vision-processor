@@ -341,23 +341,34 @@ void sig_stop(int sig_num) {
 
 int main(int argc, char* argv[]) {
 	Resources r(argc > 1 ? argv[1] : "config.yml");
-	DetectionCorrector detectionCorrector(r.lineCorners, (float)r.cameraHeight);
+	DetectionCorrector detectionCorrector(r.lineCorners, r.lineCornersIncludeBoundary, (float)r.cameraHeight);
 	BallOcclusionTracker ballOcclusionTracker;
 	cl::Kernel blobList = r.openCl->compile(kernel_blobList_cl);
 
 	uint32_t frameId = 0;
 	double lastDebugSaveTime = 0.0;
+	double lastColorSaveTime = 0.0;
 	CLArray matchArray(sizeof(CLMatch) * r.maxBlobs);
 	CLArray counter(sizeof(cl_int)*3);
 
 	signal(SIGTERM, sig_stop);
 	signal(SIGINT, sig_stop);
+	// Periodic human readable status line
+	double lastStatusTime = getRealTime();
+	int statusFrames = 0;
+	double statusBusyTime = 0.0;
+	std::string statusState = "starting";
+	std::string statusDetections;
+	int exitCode = 0;
 	while(noSigterm) {
 		frameId++;
 		r.reloadConfigIfChanged();
 		std::shared_ptr<RawImage> img = r.camera->readImage();
-		if(img == nullptr)
+		if(img == nullptr) {
+			WARN("Camera delivered no frame (stream ended, camera unplugged or network camera unreachable), stopping");
+			exitCode = 1;
 			break;
+		}
 
 		double startTime = r.camera->getTime();
 		double realStartTime = getRealTime(); // Just for realtime performance measurements
@@ -426,6 +437,10 @@ int main(int argc, char* argv[]) {
 			}
 
 			updateColors(r, botHypotheses, ballHypotheses);
+			if(realStartTime - lastColorSaveTime >= 0.5) {
+				writeColorsJson(r, "img/" + std::to_string(r.camId) + ".colors.json");
+				lastColorSaveTime = realStartTime;
+			}
 			for (auto& bot : botHypotheses)
 				bot->recalcPostColorCalib(r);
 			for (auto& ball : ballHypotheses)
@@ -468,6 +483,9 @@ int main(int argc, char* argv[]) {
 			r.socket->updateTime();
 			r.openCl->clearEvents();
 
+			statusState = "detecting";
+			statusDetections = std::to_string(detection->robots_blue_size()) + " blue + " + std::to_string(detection->robots_yellow_size()) + " yellow robots, " + std::to_string(detection->balls().size()) + " balls, " + std::to_string(matches.size()) + " blobs";
+
 			if(processingTime > r.camera->expectedFrametime())
 				LOG("frame time overrun: " << processingTime * 1000.0 << " ms " << matches.size() << " blobs " << detection->balls().size() << " balls " << (detection->robots_yellow_size() + detection->robots_blue_size()) << " bots");
 
@@ -500,6 +518,8 @@ int main(int argc, char* argv[]) {
 			}
 		} else if(r.socket->getGeometryVersion()) {
 			std::shared_ptr<CLImage> rgba = r.quad2rgba(channels);
+			statusState = "calibrating field geometry (waiting for this camera's calibration to come back from the backend)";
+			statusDetections.clear();
 			geometryCalibration(r, *rgba);
 
 			if(r.debugStreamIntervalMs > 0 && (realStartTime - lastDebugSaveTime) * 1000.0 >= r.debugStreamIntervalMs) {
@@ -507,6 +527,8 @@ int main(int argc, char* argv[]) {
 				lastDebugSaveTime = realStartTime;
 			}
 		} else {
+			statusState = "waiting for field geometry (is the backend running on the same vision_port?)";
+			statusDetections.clear();
 			r.streamQuad(channels);
 
 			bool periodicSave = r.debugStreamIntervalMs > 0 && (realStartTime - lastDebugSaveTime) * 1000.0 >= r.debugStreamIntervalMs;
@@ -517,8 +539,20 @@ int main(int argc, char* argv[]) {
 					LOG("Saved sample image");
 			}
 		}
+
+		statusFrames++;
+		const double statusNow = getRealTime();
+		statusBusyTime += statusNow - realStartTime;
+		if(statusNow - lastStatusTime >= 5.0) {
+			const double interval = statusNow - lastStatusTime;
+			LOG("status: " << statusState << " | " << statusFrames / interval << " fps, " << 1000.0 * statusBusyTime / statusFrames << " ms/frame"
+				<< (statusDetections.empty() ? "" : " | " + statusDetections));
+			lastStatusTime = statusNow;
+			statusFrames = 0;
+			statusBusyTime = 0.0;
+		}
 	}
 
 	LOG("Stopping vision_processor");
-	return 0;
+	return exitCode;
 }
