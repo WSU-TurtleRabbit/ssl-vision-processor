@@ -1,44 +1,59 @@
 # ▶️ Start here
 
-Run on the **Jetson**, each command in **its own terminal**, from the repo folder:
+> 📖 **Read the full docs on GitHub, where they look much nicer** (diagrams and tables don't show properly in Obsidian):
+> **https://github.com/WSU-TurtleRabbit/ssl-vision-processor/blob/zed-orin/docs/README.md**
+
+## What is this?
+
+A camera looks down at the field. A computer (a Jetson) finds the robots and the ball and tells the team software where they are. A web page shows you what it sees.
+
+## 1 · Which computer am I on?
+
+Type `hostname` in a terminal.
+
+| It says | You're on | Camera |
+|---|---|---|
+| `GTW-ONX-…` | 🎥 **the ZED Box** | ZED 2i, plugged in by USB |
+| anything else | 📷 **the Pi-camera Jetson** | USB camera on a Raspberry Pi |
+
+## 2 · Start it
+
+Open a terminal and copy **one** block: the one for your computer.
+
+**🎥 ZED Box**
+
+```bash
+cd ~/ssl-software/TIGERS/vision-processor
+PATH=$HOME/.local/bin:$PATH ./start_wrapper.sh geometry-wrapper-lab-divB.yml --vision-config config-zed-lab.yml --start-vision
+```
+
+Then open **http://192.168.210.130:8765** in a browser.
+
+**📷 Pi camera**
 
 ```bash
 cd ~/ssl-software/test/ssl-vision-processor
-```
-
-## 1 · Backend + vision_processor
-
-```bash
 PATH=$HOME/.local/bin:$PATH ./start_wrapper.sh geometry-event.yml --vision-config config-pi-cam.yml --start-vision
 ```
 
-Lab field instead of the foam mats: swap `geometry-event.yml` for `geometry-wrapper-lab-divB.yml`.
+Then open **http://192.168.210.222:8765** in a browser. The Pi turns its camera on by itself.
 
-vision_processor alone — **only** if the backend was started without `--start-vision` (don't run both):
+✅ **It works when** the web page shows the camera picture and a robot count above 0.
 
-```bash
-build/vision_processor config-pi-cam.yml
-```
+## 3 · Stop it
 
-## 2 · Web page
+Press **Ctrl+C** in that terminal. That's it.
 
-Open **`http://192.168.210.222:8765`** (Tailscale: `http://100.84.89.60:8765`).
-The backend serves the page itself; nothing else to start.
+## 4 · Something's wrong?
 
-After changing anything in `wrapper-frontend/`, rebuild it once, then reload the browser:
+| Problem | Do this |
+|---|---|
+| Web page won't open | Is the terminal from step 2 still running? If not, start again. |
+| Web page says "frontend is not built" | `cd wrapper-frontend && PATH=$HOME/.local/node/bin:$PATH npm ci && npm run build` |
+| 0 robots | The field corners need clicking: **Set field corners** on the web page |
+| Anything else | The panic page for your setup: [🎥 ZED Box](docs/zed-box/panic.md) · [📷 Pi camera](docs/pi-camera/panic.md) |
 
-```bash
-cd wrapper-frontend && PATH=$HOME/.local/node/bin:$PATH npm run build
-```
+## More
 
-Build says `failed to resolve import "…"`? Run `npm ci` first, then build again. See [Troubleshooting → Frontend](docs/troubleshooting.md#frontend).
-
-## Stop
-
-**Ctrl+C** in each terminal.
-
----
-
-The Pi camera starts by itself when the Pi boots (check: `curl http://192.168.210.149:8080/status` — port 8080 is the Pi, not the web page).
-The Pi feeds **one** viewer at a time: while vision_processor runs, the Pi's raw stream (`:8080/stream`) answers 409 busy. Use the camera picture on the web page instead.
-More detail: [docs/start-stop.md](docs/start-stop.md) · Something broken: [docs/panic.md](docs/panic.md)
+- **Start/stop in detail:** [🎥 ZED Box](docs/zed-box/start-stop.md) · [📷 Pi camera](docs/pi-camera/start-stop.md)
+- **Everything else** (calibration, colours, setup): [docs/README.md](docs/README.md)

@@ -1,7 +1,8 @@
-# Jetson + Raspberry Pi camera
+# Jetson docs
 
-The docs moved to **[docs/](docs/README.md)** and are split into short pages:
+The docs are in **[docs/](docs/README.md)**, split by setup:
 
-- 🚨 **Something broke?** → [docs/panic.md](docs/panic.md)
-- ▶️ **Start / stop** → [docs/start-stop.md](docs/start-stop.md)
+- ▶️ **Quick start / stop** → [00-START-HERE.md](00-START-HERE.md)
+- 🎥 **ZED Box** (ZED 2i on the Jetson) → [docs/zed-box/](docs/zed-box/start-stop.md)
+- 📷 **Pi camera** (Raspberry Pi → Jetson) → [docs/pi-camera/](docs/pi-camera/start-stop.md)
 - 🏠 **Everything else** → [docs/README.md](docs/README.md)

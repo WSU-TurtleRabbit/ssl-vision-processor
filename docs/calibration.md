@@ -1,6 +1,8 @@
-[🏠 Home](README.md) · [🚨 PANIC](panic.md) · [▶️ Start / Stop](start-stop.md)
+[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi-camera/panic.md) · [🎥 ZED](zed-box/panic.md)
 
 # 📐 Calibration
+
+**Both setups calibrate the same way.** Where file names differ, 📷 is the Pi camera setup and 🎥 the ZED Box.
 
 **Why calibrate?** The camera sees pixels; the robots need positions in millimetres. Calibration teaches
 `vision_processor` which pixel is which spot on the field. **Without it you get 0 robots.**
@@ -19,8 +21,8 @@ flowchart LR
 
 1. **Measure** the mat area and the camera height ([how to measure](#measuring-the-field-and-the-camera)).
 2. **Put the numbers in the files:**
-   - Field size goes in `geometry-event.yml` (`field_length`, `field_width`, `boundary_width`, `boundary_width_goal_line`). Then restart the backend.
-   - Camera height goes in `config-pi-cam.yml` (`camera_height`, now 1555 mm).
+   - Field size goes in the field file (`field_length`, `field_width`, `boundary_width`, `boundary_width_goal_line`): 📷 `geometry-event.yml` · 🎥 `geometry-wrapper-lab-divB.yml`. Then restart the backend.
+   - Camera height goes in the camera config (`camera_height`): 📷 `config-pi-cam.yml` (now 1555 mm) · 🎥 `config-zed-lab.yml` (now 2000 mm, [needs checking](zed-box/camera.md#camera-height)).
 3. **Click the corners:** on the web page press **Set field corners**, then click the **4 outer corners of the mats** on the camera picture.
    - **Corner 1** becomes the field's origin corner (−x, −y). Then go around the rectangle.
    - **Save** writes the corners, clears the old calibration and restarts `vision_processor` for you.
@@ -34,7 +36,7 @@ flowchart LR
 
 ## Measuring the field and the camera
 
-Current event setup (measured 2026-10-06):
+📷 Pi camera event setup, foam mats (measured 2026-10-06). The 🎥 ZED Box's lab field is 4500 × 2230 mm in `geometry-wrapper-lab-divB.yml`.
 
 ```
 ┌──────────────── 3030 mm  (mat area = what you click) ────────────────┐
@@ -49,13 +51,13 @@ Current event setup (measured 2026-10-06):
         3030 − 2·150 = 2730      1830 − 2·150 = 1530
 ```
 
-**Field** (in `geometry-event.yml`):
+**Field** (in the field file):
 - **Measure the outer edge of the mats** on all 4 sides. If the two long sides differ, straighten the mats or use the average.
 - **The long side** is `field_length`, the direction between the goals.
 - **The boundary** is a margin inside the mats, here 150 mm.
 - **Goal and penalty-area sizes** in the file are placeholders, scaled to fit. Replace them with the real goal sizes.
 
-**Camera height** (`camera_height` in `config-pi-cam.yml`): **1555 mm**
+**Camera height** (`camera_height` in the camera config). 📷 Pi: **1555 mm** · 🎥 ZED Box: 2000 mm in the config, about 2.7 m measured by the ZED ([check it](zed-box/camera.md#camera-height))
 
 ```
         ┌─────────┐  camera box
@@ -78,14 +80,14 @@ Current event setup (measured 2026-10-06):
 ## Later: field lines (when white tape is down)
 
 When the outer rectangle (both sidelines and both goal lines) is visible as white lines or tape:
-1. Set `refinement: true` under `geometry:` in `config-pi-cam.yml`.
+1. Set `refinement: true` under `geometry:` in the camera config.
 2. Put the tape width in `line_thickness` in the geometry file.
 3. Click the corners again. The lines now fine-tune the fit and correct the lens bending.
 4. Check `error_rate` in `img/*.calib.json`: lower is better. Without lines this number means nothing (about 0.98).
 
 ## Always needed
 
-- **Fixed camera settings and steady light.** Set them on the Pi ([camera settings](../pi_camera/README.md#5-adjusting-camera-settings)).
+- **Fixed camera settings and steady light.** 📷 Set them on the Pi ([camera settings](../pi_camera/README.md#5-adjusting-camera-settings)) · 🎥 in `config-zed-lab.yml` ([ZED camera settings](zed-box/camera.md)).
 - **Robots with standard SSL markers, and an orange ball.** Colours are learned automatically ([🎨 colours.md](colours.md)).
 
 Next: [🎨 colours.md](colours.md)

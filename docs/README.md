@@ -1,46 +1,46 @@
-**🏠 Home** · [🚨 PANIC](panic.md) · [▶️ Start / Stop](start-stop.md)
+**🏠 Home** · 🚨 PANIC: [📷 Pi](pi-camera/panic.md) · [🎥 ZED](zed-box/panic.md)
 
 # Vision system docs: start here
 
-**Something is broken right now?** → [🚨 panic.md](panic.md). One page, follow the boxes.
+## Which setup are you on?
+
+There are two setups. They share the software, but start, stop and fix differently. **Pick yours first:**
+
+| | 📷 **Pi camera** | 🎥 **ZED Box** |
+|---|---|---|
+| Camera | USB camera on a Raspberry Pi, video over the network | ZED 2i plugged into the Jetson by USB |
+| Computer | Jetson AGX Orin `192.168.210.222` | ZED Box (Jetson Orin NX) `192.168.210.130` |
+| Camera config | `config-pi-cam.yml` | `config-zed-lab.yml` |
+| Field file | `geometry-event.yml` (foam mats) | `geometry-wrapper-lab-divB.yml` (lab field) |
+| ▶️ Start / stop | [pi-camera/start-stop.md](pi-camera/start-stop.md) | [zed-box/start-stop.md](zed-box/start-stop.md) |
+| 🚨 Something broke | [pi-camera/panic.md](pi-camera/panic.md) | [zed-box/panic.md](zed-box/panic.md) |
+| 🛠️ One-time setup | [pi-camera/setup.md](pi-camera/setup.md) | [zed-box/setup.md](zed-box/setup.md) |
+| 📷 Camera settings | [../pi_camera/README.md](../pi_camera/README.md) | [zed-box/camera.md](zed-box/camera.md) |
+
+**Not sure which?** Run `hostname` in the terminal. `GTW-ONX-…` is the ZED Box.
 
 ## What is this, in one picture?
 
-```
- 📷 camera on a Pi  ──video──▶  🧠 Jetson: vision_processor  ──robot & ball positions──▶  🤖 team software
-                                        │
-                                        ▼
-                              📮 backend  ──▶  🖥️ web page (you look here)
+```mermaid
+flowchart LR
+    cam["📷 camera<br/>(Pi over the network,<br/>or ZED by USB)"] -->|video| vp["🧠 vision_processor<br/>(Jetson)"]
+    vp -->|"robot & ball positions"| teams["🤖 team software"]
+    vp --> be["📮 backend"] --> web["🖥️ web page<br/>(you look here)"]
 ```
 
-1. **The camera** films the field. The Pi just sends the video over the cable.
+1. **The camera** films the field.
 2. **`vision_processor`** (the brain) finds robots and balls in every frame.
 3. **The backend** (the post office) passes the results and pictures to the web page.
 4. **The web page** shows you everything, and has buttons for calibration.
 
-## Which page do I need?
+## Pages for both setups
 
 | I want to… | Open |
 |---|---|
-| Fix something that broke | [🚨 panic.md](panic.md) |
-| Start or stop the system | [▶️ start-stop.md](start-stop.md) |
 | Understand how the parts fit together | [🧩 how-it-works.md](how-it-works.md) |
 | Calibrate the field (4 corners) or measure the camera | [📐 calibration.md](calibration.md) |
 | Fix wrong colours / sunlight problems | [🎨 colours.md](colours.md) |
 | Dig into a specific error message | [🔍 troubleshooting.md](troubleshooting.md) |
-| Set up the Pi camera from scratch | [📷 ../pi_camera/README.md](../pi_camera/README.md) |
-| Set up a fresh Jetson | [🛠️ setup-jetson.md](setup-jetson.md) |
-| Use a USB camera on the Jetson (TODO) | [🔌 usb-camera.md](usb-camera.md) |
 | Know how fast it is / the GPU (CUDA) status | [⚡ performance.md](performance.md) |
-| See what was changed for the Jetson | [📝 changelog.md](changelog.md) |
-
-## Key facts to remember
-
-| Thing | Value |
-|---|---|
-| Repo folder | `~/ssl-software/test/ssl-vision-processor` |
-| Jetson address | `192.168.210.222` (Tailscale `100.84.89.60`) |
-| Pi camera address | `192.168.210.149` (Ethernet, use this) · `.150` is Wi-Fi |
-| Web page | `http://192.168.210.222:5173` |
-| Field file (event, foam mats) | `geometry-event.yml` |
-| Camera config | `config-pi-cam.yml` |
+| See what was changed | [📝 changelog.md](changelog.md) |
+| A plain USB camera on a Jetson (TODO, untested) | [🔌 usb-camera.md](usb-camera.md) |

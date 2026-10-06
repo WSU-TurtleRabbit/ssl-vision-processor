@@ -25,6 +25,7 @@ camera:
   exposure: 0.0
   gain: 0.0
   white_balance: OUTDOOR
+  name: "zed"
 
 geometry:
   camera_amount: 1
@@ -74,13 +75,13 @@ color:
   # reference_force x (value below) + history_force x (previous) + the rest x (observed).
   reference_force: 0.1
   history_force: 0.7
-  orange: [180, 161, 37]
+  orange: [176, 163, 36]
   # Carpet as the ZED SDK delivers it (auto exposure), measured 2026-10-06.
-  field: [128, 128, 128]
+  field: [109, 147, 125]
   yellow: [255, 220, 0]
   blue: [45, 190, 255]
-  green: [64, 178, 143]
-  pink: [144, 113, 128]
+  green: [62, 175, 139]
+  pink: [138, 114, 124]
 
 tracking:
   # At 25 FPS the filtered tracker velocity can lag the estimator by about

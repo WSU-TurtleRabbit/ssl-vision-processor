@@ -1,6 +1,8 @@
-[🏠 Home](README.md) · **🚨 PANIC** · [▶️ Start / Stop](start-stop.md)
+[🏠 Home](../README.md) · **🚨 PANIC** · [▶️ Start / Stop](start-stop.md) · 📷 Pi camera
 
-# 🚨 Something is broken
+# 🚨 Something is broken (Pi camera)
+
+**This page is for the Pi camera setup:** the USB camera on a Raspberry Pi, streaming to the AGX Jetson. Using the ZED Box instead? → [ZED Box panic page](../zed-box/panic.md)
 
 **Breathe.** Nothing here can break the hardware. Go top to bottom and stop at the first ❌.
 
@@ -36,7 +38,7 @@ flowchart LR
 | Nothing / timeout | The Pi is off or unplugged. Check its power and **Ethernet cable**, wait 1 minute after boot, then retry. |
 | `"streaming": true` but you're not running anything | Something else is watching the camera (only one viewer allowed). Close `ffplay`, browser tabs on `:8080`, or a second `vision_processor`. |
 
-More: [Pi troubleshooting](../pi_camera/README.md#troubleshooting)
+More: [Pi troubleshooting](../../pi_camera/README.md#troubleshooting)
 
 ### Fix B: vision_processor
 
@@ -54,12 +56,12 @@ build/vision_processor config-pi-cam.yml
 | `Camera delivered no frame ... stopping` | Camera or network problem → [Fix A](#fix-a-camera-pi). With `--start-vision` it restarts by itself. |
 | `status: waiting for field geometry` | Backend not running → [Fix C](#fix-c-backend) |
 | `status: detecting ... 0 ... robots` | Not calibrated / robots outside the field → [Fix E](#fix-e-no-robots) |
-| `Saved sample image` then stops | Not calibrated yet → [calibration.md](calibration.md) |
+| `Saved sample image` then stops | Not calibrated yet → [calibration.md](../calibration.md) |
 | `No OpenCL platform` | `sudo apt install pocl-opencl-icd` |
 | `bad file: robot-heights.yml` | You're in the wrong folder. `cd ~/ssl-software/test/ssl-vision-processor` |
 | `GStreamer warning ... /dev/video0` | Wrong config: use `config-pi-cam.yml`, not `config-usb-cam.yml` |
 
-More: [troubleshooting → vision_processor](troubleshooting.md#vision_processor)
+More: [troubleshooting → vision_processor](../troubleshooting.md#vision_processor)
 
 ### Fix C: backend
 
@@ -73,7 +75,7 @@ PATH=$HOME/.local/bin:$PATH ./start_wrapper.sh geometry-event.yml --vision-confi
 | `address already in use` | One is already running: `ss -ltnp \| grep 8765` shows its PID, stop it, start again |
 | `KeyError: 'optional_field_lines'` | Wrong field file: use `geometry-event.yml` |
 
-More: [troubleshooting → backend](troubleshooting.md#backend)
+More: [troubleshooting → backend](../troubleshooting.md#backend)
 
 ### Fix D: web page
 
@@ -87,15 +89,15 @@ cd wrapper-frontend && PATH=$HOME/.local/node/bin:$PATH npm run dev
 | Page loads, says "disconnected" | The backend is down → [Fix C](#fix-c-backend) |
 | Old or strange data | Reload the page (Ctrl+Shift+R) |
 
-More: [troubleshooting → frontend](troubleshooting.md#frontend)
+More: [troubleshooting → frontend](../troubleshooting.md#frontend)
 
 ### Fix E: no robots
 
 | You see | Do this |
 |---|---|
-| "not calibrated" | Click the 4 field corners → [calibration.md](calibration.md#now-4-corner-calibration-no-field-lines) |
-| Calibrated, still 0 robots | Are the robots inside the field rectangle? Is the picture too bright (white dots) or too dark? → [colours.md](colours.md) |
-| Robots flicker between teams / IDs | Colours drifted → [colours.md](colours.md) and click "Save learned colours" |
+| "not calibrated" | Click the 4 field corners → [calibration.md](../calibration.md#now-4-corner-calibration-no-field-lines) |
+| Calibrated, still 0 robots | Are the robots inside the field rectangle? Is the picture too bright (white dots) or too dark? → [colours.md](../colours.md) |
+| Robots flicker between teams / IDs | Colours drifted → [colours.md](../colours.md) and click "Save learned colours" |
 
 ## Step 3: still broken? Restart everything, in order
 

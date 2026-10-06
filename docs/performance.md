@@ -1,14 +1,25 @@
-[🏠 Home](README.md) · [🚨 PANIC](panic.md) · [▶️ Start / Stop](start-stop.md)
+[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi-camera/panic.md) · [🎥 ZED](zed-box/panic.md)
 
 # ⚡ Performance and the GPU (CUDA)
 
 ## Today
 
-| | Value |
+The image work runs on the **GPU with CUDA** wherever CUDA is installed. The first log line tells you which version you're running:
+
+| First log line | Means |
 |---|---|
-| Where the image work runs | the **CPU** (12 cores), via PoCL. NVIDIA has no OpenCL for Jetson. |
-| Time per frame | about **31–45 ms**, so 25–30 fps (measured in 50 W mode) |
-| Decoding the 1080p camera video | about 8 ms per frame. Not the bottleneck. |
+| `Using device: CUDA … Orin` | GPU (fast) |
+| `Using device: Portable Computing Language …` | CPU only (PoCL), about 10× slower |
+
+| | 🎥 ZED Box (Orin NX, measured 2026-10-06) | 📷 Pi camera Jetson (AGX Orin) |
+|---|---|---|
+| Image work | GPU (CUDA) | GPU if built with CUDA, otherwise CPU (PoCL) |
+| Time per frame | about **4 ms** | CUDA: about 3 ms · CPU: about 31–45 ms |
+| Frames per second | **60** (the camera's limit at 720p) | camera-limited with CUDA · 25–30 with CPU |
+| Camera → network delay | about 2.7 ms | not measured |
+| CPU use | about 0.7 of one core (out of 8) | not measured |
+
+The AGX numbers come from `cuda/NOTES.md` (one recorded video, 768×432).
 
 ## Free speed-up: full-power mode
 
@@ -16,17 +27,11 @@
 sudo nvpmodel -m 0 && sudo jetson_clocks
 ```
 
-That gives about 47 % more CPU clock (2.2 GHz instead of 1.5 GHz). Check with `nvpmodel -q`, which should show `MAXN`.
+Check with `nvpmodel -q`, which should show `MAXN`. The 🎥 ZED Box already runs in `MAXN`. On the 📷 AGX it gives about 47 % more CPU clock (2.2 GHz instead of 1.5 GHz), which matters most for the CPU build.
 
-## Big speed-up: the CUDA port (in progress)
+## The CUDA port
 
-The image work is being moved onto the Orin's GPU, on branch `cuda-backend`:
-
-```
-✅ 0 probe   ✅ 1 build setup   ✅ 2 GPU layer   ✅ 3 simple steps   ⏳ 4 float steps   ⏳ 5 full test   ⬜ 6–7 polish
-```
-
-- **Two programs from one codebase.** `vision_processor` runs on the GPU; `vision_processor_opencl` runs on the CPU and is the original code.
-- **Same results.** Each GPU step must give the same output as the CPU version. The 6 steps ported so far match byte for byte.
-- **Per-step speed so far:** colour conversion 4.8 → 0.04 ms, gradient 4.6 → 0.09 ms.
-- **Not usable for live use yet.** Detailed notes are in `cuda/NOTES.md` on the branch.
+- **Done and in use.** All image steps run on the GPU. Each one was checked against the original CPU version: same results, byte for byte.
+- **Two programs from one codebase.** `vision_processor` uses the GPU. The CPU build (`cmake -B build -DWITH_CUDA=OFF .`) is the original code.
+- **Details and measurements:** `cuda/NOTES.md`.
+- **Possible later speed-ups**, not needed at 60 fps: faster SAT steps, fewer waits between steps. See "Remaining phases" in `cuda/NOTES.md`.

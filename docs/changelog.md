@@ -1,8 +1,16 @@
-[🏠 Home](README.md) · [🚨 PANIC](panic.md) · [▶️ Start / Stop](start-stop.md)
+[🏠 Home](README.md) · 🚨 PANIC: [📷 Pi](pi-camera/panic.md) · [🎥 ZED](zed-box/panic.md)
 
 # 📝 What changed for the Jetson
 
-## 2026-10-06, in 5 lines
+## 2026-10-06, ZED Box (🎥)
+
+1. **New camera driver `ZED`.** It reads the ZED 2i through the ZED SDK. The image is shrunk on the GPU and handed to the detector without a CPU copy. Config: `config-zed-lab.yml`.
+2. **CUDA by default.** On a Jetson the build uses the GPU (CUDA). CMake picks `g++-10` on Ubuntu 20.04 and finds the ZED SDK by itself.
+3. **60 fps at 768×432, with automatic exposure, gain and white balance.** Measured: 2 robots and the ball in every frame, ~4 ms per frame, ~2.7 ms from camera to network.
+4. **Docs split by setup:** [pi-camera/](pi-camera/start-stop.md) and [zed-box/](zed-box/start-stop.md), with the shared pages labelled 📷 / 🎥.
+
+
+## 2026-10-06, Pi camera (📷), in 5 lines
 
 1. `src/CameraModel.cpp` compiles with Ubuntu 22.04's Eigen 3.4.0. Everything else built unchanged.
 2. Image processing runs on **PoCL** (OpenCL on the CPU), because NVIDIA ships no OpenCL for Jetson. A CUDA port is in progress on branch `cuda-backend`.
