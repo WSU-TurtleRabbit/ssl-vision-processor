@@ -72,10 +72,13 @@ public:
 	double gamma;
 	std::string fourcc;
 	bool cropLeftHalf;
+	bool rectify; // ZED: deliver the SDK's rectified (undistorted) image instead of the raw sensor image
+	unsigned int serial; // ZED: select the camera by serial number instead of id
 
 	WhiteBalanceType whiteBalanceType = WhiteBalanceType_Manual;
 	double whiteBalanceBlue;
 	double whiteBalanceRed;
+	double whiteBalanceTemperature = 0.0; // Kelvin, ZED
 	double whiteBalance[2];
 };
 

@@ -65,6 +65,14 @@ void synchronize() {
 	CUDA_CHECK(cudaStreamSynchronize(stream()));
 }
 
+cudaStream_t computeStream() {
+	return stream();
+}
+
+void* computeStreamHandle() {
+	return stream();
+}
+
 Allocation::Allocation(size_t size): size(size) {
 	if(size == 0)
 		return;

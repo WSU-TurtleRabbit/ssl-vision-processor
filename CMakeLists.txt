@@ -13,12 +13,24 @@
 #    limitations under the License.
 
 cmake_minimum_required(VERSION 3.22)
+
+# C++20 needs GCC >= 10; Ubuntu 20.04 (JetPack 5) defaults to GCC 9, so prefer g++-10 when it is installed
+if(NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX} AND EXISTS "/usr/bin/g++-10")
+    execute_process(COMMAND g++ -dumpversion OUTPUT_VARIABLE VP_DEFAULT_GCC_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(VP_DEFAULT_GCC_VERSION VERSION_LESS 10)
+        set(CMAKE_C_COMPILER "/usr/bin/gcc-10")
+        set(CMAKE_CXX_COMPILER "/usr/bin/g++-10")
+        if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER)
+            set(CMAKE_CUDA_HOST_COMPILER "/usr/bin/g++-10")
+        endif()
+    endif()
+endif()
+
 project(vision_processor)
 enable_language(ASM)
 
 option(WITH_SPINNAKER "Build with Spinnaker support (if library available)" ON)
 option(WITH_MVIMPACT "Build with mvIMPACT/Bluefox support (if library available)" ON)
-option(WITH_OPENCL "Build the OpenCL compute backend targets" ON)
 
 # CUDA backend: enabled by default on aarch64 (Jetson) when a CUDA compiler is found, opt-in elsewhere
 include(CheckLanguage)
@@ -32,6 +44,12 @@ else()
     set(WITH_CUDA_DEFAULT OFF)
 endif()
 option(WITH_CUDA "Build the CUDA compute backend targets" ${WITH_CUDA_DEFAULT})
+# This fork targets the Jetson: with CUDA available the (CPU-only, PoCL) OpenCL targets are not built unless requested
+if(WITH_CUDA)
+    option(WITH_OPENCL "Build the OpenCL compute backend targets" OFF)
+else()
+    option(WITH_OPENCL "Build the OpenCL compute backend targets" ON)
+endif()
 if(WITH_CUDA)
     if(NOT CMAKE_CUDA_COMPILER)
         message(FATAL_ERROR "WITH_CUDA=ON but no CUDA compiler found (set CMAKE_CUDA_COMPILER or CUDACXX)")
@@ -73,6 +91,23 @@ if(NOT WITH_OPENCL AND NOT WITH_CUDA)
 endif()
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio)
 find_package(Spinnaker)
+
+# StereoLabs ZED SDK (camera driver "ZED"), needs the CUDA backend. The SDK's own zed-config.cmake uses the
+# removed FindCUDA module, so the library is located directly.
+set(ZED_DIR "/usr/local/zed" CACHE PATH "ZED SDK installation directory")
+if(WITH_CUDA AND EXISTS "${ZED_DIR}/include/sl/Camera.hpp")
+    set(WITH_ZED_DEFAULT ON)
+else()
+    set(WITH_ZED_DEFAULT OFF)
+endif()
+option(WITH_ZED "Build with ZED SDK camera support (requires WITH_CUDA)" ${WITH_ZED_DEFAULT})
+if(WITH_ZED)
+    if(NOT WITH_CUDA)
+        message(FATAL_ERROR "WITH_ZED=ON requires WITH_CUDA=ON")
+    endif()
+    find_library(ZED_LIBRARY sl_zed HINTS "${ZED_DIR}/lib" REQUIRED)
+    message(STATUS "ZED SDK found: ${ZED_LIBRARY}")
+endif()
 find_package(yaml-cpp REQUIRED)
 
 # Protobuf links to Abseil starting with 4.22.0. The FindProtobuf module does
@@ -188,6 +223,11 @@ if(WITH_CUDA)
     foreach(target ${PROJECT_NAME} "geometry_benchmark" "blob_benchmark")
         add_dependencies(${target} AUTOGENERATE)
         target_link_libraries(${target} vp_cuda_backend)
+        if(WITH_ZED)
+            target_compile_definitions(${target} PRIVATE ZED_SDK)
+            target_include_directories(${target} SYSTEM PRIVATE "${ZED_DIR}/include")
+            target_link_libraries(${target} ${ZED_LIBRARY} CUDA::cuda_driver)
+        endif()
     endforeach()
 
     install(TARGETS ${PROJECT_NAME} DESTINATION /usr/local/bin)

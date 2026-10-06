@@ -59,6 +59,12 @@ struct EventPair;
 /** Blocks until all work enqueued so far on the compute stream has finished. */
 void synchronize();
 
+/** The in-order compute stream all kernels run on (a cudaStream_t), for drivers that enqueue GPU work themselves. */
+void* computeStreamHandle();
+
+/** Converts a pitched device BGRA image into a tightly packed BGR image (e.g. a RawImage's device pointer) on the compute stream. */
+void bgra2bgr(const void* srcDevice, size_t srcPitch, void* dstDevice, int width, int height);
+
 } // namespace vpcuda
 
 

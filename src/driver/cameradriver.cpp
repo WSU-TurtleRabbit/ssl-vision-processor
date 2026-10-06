@@ -22,6 +22,9 @@
 #ifdef MVIMPACT
 #include "driver/mvimpactdriver.h"
 #endif
+#ifdef ZED_SDK
+#include "driver/zeddriver.h"
+#endif
 
 #include <yaml-cpp/yaml.h>
 
@@ -51,11 +54,14 @@ CameraConfig::CameraConfig(const YAML::Node &cam) {
 	gamma = cam["gamma"].as<double>(1.0);
 	fourcc = cam["fourcc"].as<std::string>("");
 	cropLeftHalf = cam["crop_left_half"].as<bool>(false);
+	rectify = cam["rectify"].as<bool>(false);
+	serial = cam["serial"].as<unsigned int>(0);
 
 	const YAML::Node wb = cam["white_balance"].IsDefined() ? cam["white_balance"] : YAML::Node();
 	if(wb.IsMap()) {
 		whiteBalanceBlue = wb["blue"].as<double>(1.0);
 		whiteBalanceRed = wb["red"].as<double>(1.0);
+		whiteBalanceTemperature = wb["temperature"].as<double>(0.0);
 	} else {
 		whiteBalanceType = (wb.as<std::string>("OUTDOOR") == "OUTDOOR")
 				? WhiteBalanceType_AutoOutdoor
@@ -89,6 +95,11 @@ std::unique_ptr<CameraDriver> openCamera(const CameraConfig& config) {
 #ifdef MVIMPACT
 	if(config.driverType == "MVIMPACT")
 		return std::make_unique<MVImpactDriver>(config);
+#endif
+
+#ifdef ZED_SDK
+	if(config.driverType == "ZED")
+		return std::make_unique<ZEDDriver>(config);
 #endif
 
 	if(config.driverType == "OPENCV")
