@@ -11,6 +11,7 @@ camera:
   path: http://192.168.210.149:8080/stream
   output_width: 768
   output_height: 432
+  name: "pi1"
 
 geometry:
   camera_amount: 1
