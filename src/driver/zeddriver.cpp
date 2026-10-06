@@ -2,8 +2,16 @@
 #ifdef ZED_SDK
 #include "zeddriver.h"
 
+#include <sl/Camera.hpp>
 #include <cuda.h>
 #include <cuda_runtime_api.h>
+
+struct ZEDState {
+	sl::Camera camera;
+	sl::Mat gpuImage;
+	sl::VIEW view;
+	sl::Resolution outputSize;
+};
 
 static sl::RESOLUTION resolutionFromHeight(int height) {
 	// Per-eye heights are unique per mode; 0 lets the SDK pick its default
@@ -23,7 +31,10 @@ static bool endsWith(const std::string& s, const std::string& suffix) {
 	return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-ZEDDriver::ZEDDriver(const CameraConfig& config): view(config.rectify ? sl::VIEW::LEFT : sl::VIEW::LEFT_UNRECTIFIED), outputSize(std::max(config.outputWidth, 0), std::max(config.outputHeight, 0)), name("zed"), svo(endsWith(config.path, ".svo") || endsWith(config.path, ".svo2")) {
+ZEDDriver::ZEDDriver(const CameraConfig& config): zed(std::make_unique<ZEDState>()), name("zed"), svo(endsWith(config.path, ".svo") || endsWith(config.path, ".svo2")) {
+	sl::Camera& camera = zed->camera;
+	zed->view = config.rectify ? sl::VIEW::LEFT : sl::VIEW::LEFT_UNRECTIFIED;
+	sl::Resolution outputSize(std::max(config.outputWidth, 0), std::max(config.outputHeight, 0));
 	// Run the SDK in the compute backend's CUDA context so its GPU images can be used by our kernels directly
 	if(cudaFree(nullptr) != cudaSuccess)
 		FATAL("[ZED] Could not initialize CUDA");
@@ -71,10 +82,14 @@ ZEDDriver::ZEDDriver(const CameraConfig& config): view(config.rectify ? sl::VIEW
 	if(!svo)
 		applySettings(config);
 
-	gpuImage.alloc(outputSize, sl::MAT_TYPE::U8_C4, sl::MEM::GPU);
+	zed->outputSize = outputSize;
+	outputWidth = (int)outputSize.width;
+	outputHeight = (int)outputSize.height;
+	zed->gpuImage.alloc(outputSize, sl::MAT_TYPE::U8_C4, sl::MEM::GPU);
 }
 
 void ZEDDriver::applySettings(const CameraConfig& config) {
+	sl::Camera& camera = zed->camera;
 	auto set = [&](sl::VIDEO_SETTINGS setting, int value) {
 		sl::ERROR_CODE error = camera.setCameraSettings(setting, value);
 		if(error != sl::ERROR_CODE::SUCCESS)
@@ -107,10 +122,11 @@ void ZEDDriver::applySettings(const CameraConfig& config) {
 }
 
 ZEDDriver::~ZEDDriver() {
-	camera.close();
+	zed->camera.close();
 }
 
 std::shared_ptr<RawImage> ZEDDriver::readImage() {
+	sl::Camera& camera = zed->camera;
 	sl::ERROR_CODE error = camera.grab();
 	if(error == sl::ERROR_CODE::END_OF_SVOFILE_REACHED)
 		return nullptr;
@@ -120,17 +136,17 @@ std::shared_ptr<RawImage> ZEDDriver::readImage() {
 	}
 
 	if(image == nullptr || !image.unique())
-		image = std::make_shared<RawImage>(&PixelFormat::BGR8, (int)outputSize.width, (int)outputSize.height, name);
+		image = std::make_shared<RawImage>(&PixelFormat::BGR8, outputWidth, outputHeight, name);
 
 	cudaStream_t stream = (cudaStream_t)vpcuda::computeStreamHandle();
-	error = camera.retrieveImage(gpuImage, view, sl::MEM::GPU, outputSize, stream);
+	error = camera.retrieveImage(zed->gpuImage, zed->view, sl::MEM::GPU, zed->outputSize, stream);
 	if(error != sl::ERROR_CODE::SUCCESS) {
 		WARN("[ZED] retrieveImage failed: " << sl::toString(error));
 		return nullptr;
 	}
 
 	// Ordered on the compute stream before every kernel that reads the image; CPU maps synchronize the stream
-	vpcuda::bgra2bgr(gpuImage.getPtr<sl::uchar1>(sl::MEM::GPU), gpuImage.getStepBytes(sl::MEM::GPU), image->buffer.device(), image->width, image->height);
+	vpcuda::bgra2bgr(zed->gpuImage.getPtr<sl::uchar1>(sl::MEM::GPU), zed->gpuImage.getStepBytes(sl::MEM::GPU), image->buffer.device(), image->width, image->height);
 	image->timestamp = (double)camera.getTimestamp(sl::TIME_REFERENCE::IMAGE).getNanoseconds() / 1e9;
 	return image;
 }
@@ -140,7 +156,7 @@ const PixelFormat ZEDDriver::format() {
 }
 
 double ZEDDriver::expectedFrametime() {
-	return 1.0 / camera.getCameraInformation().camera_configuration.fps;
+	return 1.0 / zed->camera.getCameraInformation().camera_configuration.fps;
 }
 
 #endif

@@ -107,6 +107,9 @@ if(WITH_ZED)
     endif()
     find_library(ZED_LIBRARY sl_zed HINTS "${ZED_DIR}/lib" REQUIRED)
     message(STATUS "ZED SDK found: ${ZED_LIBRARY}")
+    # The SDK headers use constructor template-ids (Vector2<T>(...)) that C++20 forbids and GCC >= 11 rejects;
+    # only this file includes them
+    set_source_files_properties(src/driver/zeddriver.cpp PROPERTIES COMPILE_OPTIONS "-std=gnu++17")
 endif()
 find_package(yaml-cpp REQUIRED)
 
