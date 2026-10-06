@@ -1,3 +1,5 @@
+[🏠 Docs home](../docs/README.md) · [🚨 PANIC](../docs/panic.md) · [▶️ Start / Stop](../docs/start-stop.md)
+
 # Raspberry Pi network camera
 
 Turns a Raspberry Pi with a USB camera into a network camera for `vision_processor`.
@@ -34,6 +36,28 @@ The bottleneck is the network and USB bus, not the CPU.
 Also needed: a **wired Ethernet** connection (Wi-Fi is too slow/unstable for 60 fps),
 a camera that offers **MJPG** (`v4l2-ctl --list-formats-ext`), and the official power supply
 (undervoltage drops USB devices).
+
+### Pi 4 (minimum recommended, what this lab uses)
+
+- Any RAM size works (1 GB is plenty; the Pi only forwards frames, CPU load stays low).
+- Plug the camera into a **blue USB 3 port**. The Ethernet port is separate, so camera and network never compete.
+- Runs the defaults in `camstream.service` (1920x1080 @ 60 fps) comfortably, and 120 fps with a bright field.
+
+### Pi 3 (works, with limits)
+
+- On a Pi 3 the **Ethernet port and all USB ports share one USB 2 bus** (480 Mbit/s total).
+  The video crosses that bus twice: camera → Pi, then Pi → Ethernet.
+- **Pi 3B**: 100 Mbit/s Ethernet. Use `--size 1280x720 --fps 60` (≈55 Mbit/s) or `--size 1920x1080 --fps 30` (≈60 Mbit/s).
+- **Pi 3B+**: faster Ethernet (~300 Mbit/s in practice), so 1080p @ 60 may work. Test it before relying on it.
+- Use the 64-bit OS (the Pi 3 supports it) and the official 2.5 A supply; a Pi 3 under load browns out USB more easily.
+- Change the size/fps on the `ExecStart=` line (see [section 5](#5-adjusting-camera-settings)), then check
+  the real frame rate from the Jetson:
+
+```bash
+timeout 10 ffmpeg -hide_banner -i http://<pi-ip>:8080/stream -f null - 2>&1 | grep -o "fps=[ 0-9.]*" | tail -1
+```
+
+If it stays clearly below the configured fps, lower `--size` or `--fps`, or use a Pi 4.
 
 ## 1. Prepare the Pi (once)
 
@@ -154,6 +178,34 @@ Good starting points for SSL vision (from [documentation.md](../documentation.md
 
 > Older kernels use `exposure_auto`, `exposure_absolute`, `white_balance_temperature_auto` instead.
 > Colours of the robot markers do **not** need tuning on the Pi: `vision_processor` learns them automatically.
+
+## 6. Remote control (no SSH needed)
+
+Four commands can be sent from the Jetson or the web page, protected by a shared secret:
+
+| Command | What happens |
+|---|---|
+| `restart` | Camera off, the viewer reconnects, camera on again. Use when the picture is frozen or stuck. |
+| `close` | Camera off and refused to everyone until `open` or a reboot. Use before moving or unplugging things. |
+| `open` | Allow streaming again after `close`. |
+| `shutdown` | Shuts the Pi down cleanly (then pull the power). |
+
+**Set up once** (on the Pi, after copying the new `camstream.py`, `camstream.service` and `camstream-sudoers`):
+
+```bash
+echo "CAMSTREAM_TOKEN=$(openssl rand -hex 16)" | sudo tee /etc/camstream.env && sudo chmod 600 /etc/camstream.env && sudo install -m 440 ~/camstream-sudoers /etc/sudoers.d/camstream && sudo cp ~/camstream.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart camstream && sudo cat /etc/camstream.env
+```
+
+The last line prints the token. Give the same token to the Jetson backend (see the backend README, `--camera-token-file`), so the web page's camera buttons work.
+Without a token on the Pi, the commands are switched off and answer `403`.
+
+**From the Jetson by hand** (replace `TOKEN`):
+
+```bash
+curl -X POST -H "X-Camstream-Token: TOKEN" http://192.168.210.149:8080/control/close
+```
+
+Same for `/control/open`, `/control/restart` and `/control/shutdown`. `GET /status` shows `"closed": true/false` and `"control": true` when a token is set.
 
 ## Troubleshooting
 

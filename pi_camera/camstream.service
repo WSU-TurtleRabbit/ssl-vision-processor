@@ -7,6 +7,9 @@ After=network-online.target
 Type=simple
 User=pi
 SupplementaryGroups=video
+# Shared secret for the remote control commands (restart/close/open/shutdown), see README "Remote control".
+# Create /etc/camstream.env with: CAMSTREAM_TOKEN=<secret>
+EnvironmentFile=-/etc/camstream.env
 ExecStart=/usr/bin/python3 /home/pi/camstream.py --device /dev/video0 --size 1920x1080 --fps 60 --port 8080
 Restart=always
 RestartSec=2
