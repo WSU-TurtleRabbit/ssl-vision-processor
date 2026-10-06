@@ -2,29 +2,50 @@
 
 Browser UI for the vision-processor wrapper. Svelte 5 + TypeScript + Vite.
 
-Currently a skeleton: connects to `wrapper_backend`'s WebSocket at
-`ws://<host>:8765/ws`, asks the backend (via `GET /snapshots`) which
-debug images currently exist on disk, and renders an `<img>` for each
-one, refreshed once per second. A separate dev panel lets you subscribe
-to `wrapper_packet.out` and see the raw JSON.
+Operator dashboard: connects to `wrapper_backend`'s WebSocket at `/ws`,
+lists the debug images on disk via `GET /snapshots` and shows them
+(refreshed once per second), and polls `GET /api/health` and
+`GET /api/config` for service status and the active `vision_processor`
+config.
 
-## Run
+The UI always talks to **its own origin** (`/ws`, `/api/*`, `/snapshot*`).
+In development the Vite dev server proxies those paths to the backend on
+`localhost:8765`; in production the backend serves the built UI itself.
+Either way the browser only needs to reach one port, and it keeps working
+behind an HTTPS reverse proxy such as `tailscale serve` (`wss://` is
+picked automatically).
+
+## Requirements
+
+Node.js >= 22.13 (see `engines` in `package.json`). On the Jetson, Node is
+a user-local install under `~/.local/node` (no sudo needed); put it on
+`PATH` first:
+
+```
+export PATH=$HOME/.local/node/bin:$PATH
+node --version
+```
+
+## Run (development)
 
 Two terminals from the repo root:
 
 ```
-# terminal 1 (the wrapper backend, with its WebSocket on :8765)
+# terminal 1 (the wrapper backend on :8765)
 ./start_wrapper.sh
 
-# terminal 2 (the Vite dev server, on :5173 with HMR)
+# terminal 2 (the Vite dev server on :5173 with HMR)
 cd wrapper-frontend
 npm install
 npm run dev
 ```
 
-Open <http://localhost:5173>. Whatever debug images the C++ side has
-written to `img/` will appear in the grid; click "Subscribe to
-wrapper_packet.out" to also see the raw JSON frames.
+`npm run dev` listens on all interfaces (`server.host: true`), so open
+`http://<jetson-ip>:5173` from another machine (or
+<http://localhost:5173> locally). Only port 5173 has to be reachable:
+`/ws`, `/api`, `/snapshots` and `/snapshot/` are proxied to the backend
+(see `vite.config.ts`). To proxy to a backend on another port, set
+`WRAPPER_BACKEND`, e.g. `WRAPPER_BACKEND=http://localhost:8795 npm run dev`.
 
 ## Architecture
 
@@ -33,11 +54,73 @@ wrapper_packet.out" to also see the raw JSON frames.
   store of the latest message). Subscribes to a topic lazily on first
   reader, unsubscribes when the last reader goes away. Reconnects on
   close with exponential backoff (1s → 30s).
-- `src/App.svelte` — placeholder UI: connection badge + a grid of
-  `<img>` tags, one per entry returned by `GET /snapshots`. The list is
-  refreshed every 5 s; each `<img>` is refreshed once per second via a
-  cache-busting `?t=<ms>` query. Plus a dev panel with a subscribe
-  toggle + JSON dump for `wrapper_packet.out`.
+- `src/App.svelte` — operator UI: connection badge, snapshot viewer
+  (list from `GET /snapshots` every 5 s, image refreshed once per second
+  via a cache-busting `?t=<ms>` query) with a projected field-geometry
+  overlay (field from the saved corners, numbered corner markers, live
+  robots/balls at their image pixels, redrawn on every detection frame),
+  detection table, service status and the active config
+  (`GET /api/config`). Detections older than 1 s are dropped, and a state
+  line explains an empty table ("vision_processor not running" /
+  "running, not calibrated → set field corners" / "recalibrating..." /
+  "no detection frames" / "N robots, M balls (live)"). The calibration
+  state is polled from `GET /api/calibration` every second.
+- `src/lib/ServicesPanel.svelte` — services from `GET /api/health`: Pi
+  camera (only for an http(s) `camera.path`; online/offline, streaming,
+  client, size, fps), `vision_processor` (running/stopped, pid, managed vs
+  started by hand, uptime, restarts, last detection age; Start / Stop /
+  Restart via `POST /api/vision/*`, "Show log" polls `GET /api/vision/log`
+  every second), backend uptime, field calibration state. Response types
+  live in `src/lib/health.ts`.
+- `src/lib/FieldCorners.svelte` — "Set field corners" mode (field
+  calibration without field lines). Freezes one raw snapshot, collects 4
+  clicks (numbered markers, polygon preview, drag a marker to adjust,
+  Undo / Reset / Cancel, Esc cancels), maps CSS px to image px, renumbers
+  2..4 clockwise from corner 1 and checks convexity. "I click: outer edge
+  incl. boundary" (default; the derived field corners are drawn dashed,
+  same homography as the backend, lens distortion ignored) or "the field
+  corners directly". Sizes come from `GET /api/calibration` (the published
+  geometry). "Save corners" posts to `POST /api/calibration/corners`; the
+  viewer then shows "recalibrating..." until the backend has a calibration
+  again. Corners saved in the config are pre-filled.
+- `src/lib/LensCorrection.svelte` — "Lens correction" mode: click points
+  along straight seams/edges (Next line / Enter, Undo point, Delete line,
+  Clear all, Esc), >= 3 lines of >= 4 points, posts to
+  `/api/calibration/lens`; "Remove lens correction" sends DELETE. The overlay
+  draws the saved lines (purple) and the calibrated model's straight-line
+  reprojection (dashed); the viewer chip shows k2 and the principal point.
+- `src/lib/GeometryEditor.svelte` — field geometry editor with a live
+  preview (`/api/geometry`), "Recalibrate now" after a size change, and the
+  "Refine with field lines" switch (`/api/calibration/refinement`).
+- `src/lib/PerformancePanel.svelte` — per-camera rate / processing / network
+  latency / robots / balls from `/api/metrics` (sparkline of the rate) plus
+  this page's detection updates/s and WebSocket messages/s.
+- `src/lib/HelpView.svelte` — Help (`#/help/<doc>`), loaded lazily: renders
+  `/api/docs/<name>` with marked + DOMPurify, GitHub-style heading ids,
+  in-app doc links, copy buttons on code blocks, mermaid diagrams (mermaid is
+  a separate lazy chunk, themed light/dark). Navigation mirrors
+  `docs/README.md`. The red "🚨 Panic" header button opens `panic.md`.
+- `src/lib/CameraName.svelte` — camera name ("Camera <id>" when unset) with
+  inline rename (✎, Enter saves via `POST /api/camera/name`, Esc cancels);
+  shown in the header, the Services Pi row, Performance and the
+  corners/lens/colour modes.
+- Header: ⟳ Refresh (re-fetches everything, reconnects the WebSocket, shows
+  the time), theme Light/Dark/System (CSS variables in `App.svelte`, choice
+  remembered in `localStorage`), ? Help, 🚨 Panic. The Services Pi camera row
+  has a _Restart camera_ button (`POST /api/camera/restart`; disabled with a
+  tooltip when no token is configured).
+- Colours: "Auto-calibrate colours" (`/api/colors/auto`) with progress and the
+  saved/skipped result. Detections and Colours sit side by side on wide
+  screens.
+- `src/lib/ColorPanel.svelte` — colour calibration panel. Polls
+  `GET /api/colors` every second and shows learned vs reference colour
+  per blob class (values are brightness-free dRGB; the swatches are hue
+  previews, `clamp(128 + 2 * (d - 127.5))` per channel). "Save learned
+  colours as reference" (two-step confirm) posts `{"from": "learned"}` to
+  `POST /api/colors/save`. "Pick" samples the raw snapshot instead: click
+  the colour in the image, the browser averages RGB over a 3 px radius
+  (image pixels), converts it to dRGB with `kernel/resampling.cl`'s
+  integer formula and posts it on "Apply". Esc cancels.
 - `src/main.ts` — mounts `App` into `#app`.
 
 The WS wire format mirrors `wrapper_backend/websocket.py`'s envelope:
@@ -53,9 +136,7 @@ The WS wire format mirrors `wrapper_backend/websocket.py`'s envelope:
 
 Snapshot endpoints are plain HTTP: `GET /snapshots` returns the list of
 available `{cam_id, view}` entries as JSON; `GET /snapshot/<cam_id>/<view>`
-returns the actual `image/jpeg` or `image/png` (or 404 if missing).
-`<img>` tags don't trigger CORS for display, so cross-origin `:5173` ->
-`:8765` works in dev without a Vite proxy.
+returns exactly `img/<cam_id>.<view>.{jpg,jpeg,png}` (or 404 if missing).
 
 ## Scripts
 
@@ -78,6 +159,8 @@ Python. TypeScript is configured strict (`strict`,
 
 ## Production serving
 
-Currently not wired. `npm run build` produces `dist/`; the wrapper
-backend does not yet serve it. For now run `npm run dev` (or
-`npm run preview`) on a separate port.
+`npm run build` writes `dist/`. The wrapper backend already serves it on
+the same port as the API: `GET /` returns `dist/index.html` and
+`/assets/*` is resolved per request, so a rebuild is picked up without
+restarting the backend. Open `http://<jetson-ip>:8765/` — no dev server
+needed. (Override the directory with `--frontend-dir`.)

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+_EXTENSIONS = ("jpg", "jpeg", "png")
 _FILENAME_RE = re.compile(r"^(?P<cam_id>\d+)\.(?P<view>.+)\.(?P<ext>jpg|jpeg|png)$")
 
 
@@ -33,7 +34,15 @@ def register(http_app: web.Application, img_dir: Path) -> None:
     async def file_handler(request: web.Request) -> web.FileResponse:
         cam_id = request.match_info["cam_id"]
         view = request.match_info["view"]
-        matches = list(img_dir.glob(f"{cam_id}.{view}.*"))
+        # Validate against the same scheme /snapshots lists, so the path
+        # params can't smuggle in glob/path syntax.
+        if _FILENAME_RE.match(f"{cam_id}.{view}.png") is None or "/" in view:
+            raise web.HTTPNotFound
+        matches = [
+            path
+            for ext in _EXTENSIONS
+            if (path := img_dir / f"{cam_id}.{view}.{ext}").is_file()
+        ]
         if not matches:
             raise web.HTTPNotFound
         return web.FileResponse(max(matches, key=lambda p: p.stat().st_mtime))

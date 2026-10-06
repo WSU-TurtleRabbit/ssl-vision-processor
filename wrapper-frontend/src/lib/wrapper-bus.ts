@@ -2,12 +2,11 @@ import { readable, type Readable } from "svelte/store";
 
 export type ConnectionState = "connecting" | "open" | "closed";
 
+// Always same-origin: the backend serves the built UI on :8765, and the
+// Vite dev server proxies /ws to it (see vite.config.ts). This also keeps
+// working behind an HTTPS reverse proxy (wss).
 const websocketScheme = location.protocol === "https:" ? "wss" : "ws";
-const websocketHost =
-  location.port === "8765"
-    ? location.host
-    : `${location.hostname || "localhost"}:8765`;
-const DEFAULT_URL = `${websocketScheme}://${websocketHost}/ws`;
+const DEFAULT_URL = `${websocketScheme}://${location.host}/ws`;
 const BACKOFF_INITIAL_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 
@@ -28,6 +27,8 @@ class WrapperBus {
   private latest = new Map<string, unknown>();
   private backoffMs = BACKOFF_INITIAL_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Total WebSocket messages received (for the Performance panel). */
+  messageCount = 0;
 
   constructor(private readonly url: string) {
     this.connect();
@@ -62,6 +63,17 @@ class WrapperBus {
         this.send({ action: "unsubscribe", topic });
       }
     };
+  }
+
+  /** Reconnect now if the socket is not open (manual Refresh). */
+  reconnectNow(): void {
+    if (this.socket?.readyState === WebSocket.OPEN) return;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.backoffMs = BACKOFF_INITIAL_MS;
+    if (this.socket?.readyState !== WebSocket.CONNECTING) this.connect();
   }
 
   private connect(): void {
@@ -113,6 +125,7 @@ class WrapperBus {
   }
 
   private onMessage(raw: unknown): void {
+    this.messageCount += 1;
     if (typeof raw !== "string") return;
     let parsed: ServerMessage;
     try {
@@ -143,4 +156,14 @@ export function topic<T>(name: string): Readable<T | null> {
       set(value as T);
     });
   });
+}
+
+/** Reconnect the WebSocket now if it is not open. */
+export function reconnect(): void {
+  bus.reconnectNow();
+}
+
+/** Number of WebSocket messages received since page load. */
+export function messageCount(): number {
+  return bus.messageCount;
 }
