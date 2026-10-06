@@ -73,3 +73,99 @@ Used by `quad2rgba.cl`, `quad2nv12.cl`, `resampling.cl`
 * Struct layouts: `CLCameraModel` (Perspective.h) / `CameraModel` (resampling.cl) are
   80 B packed; `CLMatch` (main.cpp) / `Match` (blobList.cl) are 22 B packed with
   misaligned floats → byte-wise stores on the CUDA side, `static_assert` the layouts.
+
+## Layout (Phases 1–3)
+
+```
+src/compute.h                  backend switch (VP_BACKEND_CUDA → cuda_compute.h, else opencl.h)
+cuda/include/cuda_compute.h    façade with the same shape as src/opencl.h + minimal `cl` shim
+cuda/include/cuda_kernel_abi.h GlobalSize, ImageView, signature tags, kernel registration (host + nvcc)
+cuda/src/cuda_compute.cpp      runtime: pinned mapped memory, pools, maps, events, registry, launch
+cuda/kernels/*.cu              one file per kernel/*.cl, cl_emulation.cuh = PoCL-exact built-ins
+cuda/tools/kernel_compare.cpp  per-kernel comparison harness (built for both backends)
+cuda/probes/*.cpp              Phase-0 PoCL probes
+```
+
+Build: `cmake -B build-cuda . && make -j12 -C build-cuda` builds `vision_processor`,
+`geometry_benchmark`, `blob_benchmark`, `kernel_compare` (CUDA) and the same with `_opencl`.
+`-DWITH_CUDA=OFF` gives the upstream OpenCL-only build with the original target names.
+`WITH_CUDA` defaults to ON on aarch64 when nvcc is found (`/usr/local/cuda/bin/nvcc` is picked
+up automatically), `CMAKE_CUDA_ARCHITECTURES` defaults to 87.
+
+Runtime design:
+* Memory: `cudaHostAlloc(cudaHostAllocMapped)` (zero-copy, I/O coherent on Orin), zero
+  initialised. Not managed memory: Orin reports `concurrentManagedAccess=0` and the CPU maps
+  buffers from other threads while kernels run (rtpstreamer, snapshotwriter, spinnaker).
+  Maps = `cudaStreamSynchronize` + host pointer (same blocking semantics as the OpenCL maps on
+  the in-order queue), unmap is a no-op. Images are tightly packed (pitch = width × pixel size).
+* `compile(code, options)`: kernel identified by pointer identity with the embedded
+  `kernel_*_cl` symbol (CMake generates `cuda_kernel_table.h`), variant from `-D` options.
+  Unported kernel/variant → fatal error only when run:
+  `[CUDA] Kernel resampling (variant 'BGR') is not ported to the CUDA backend yet`.
+* `run()`: images → `ImageView`, buffers → device pointer, values by copy; `GlobalSize` is
+  prepended; argument types are checked against the `__global__` signature (pointers and
+  structs by size, like `clSetKernelArg`); 16×16 blocks (2D) / 256 (1D) on one non-blocking
+  in-order stream; pooled `cudaEvent` pairs, `printRuntimes()` prints the same format.
+
+## Phase 3 results (integer kernels)
+
+Ported: raw2quad, quad2rgba, quad2nv12 (BGR/RGGB/GRBG), rgba2nv12, f2nv12, gradientDot.
+
+```
+build-cuda/kernel_compare_opencl dump ref && build-cuda/kernel_compare dump test
+build-cuda/kernel_compare compare ref test      # exit code 1 on mismatch
+build-cuda/kernel_compare bench                  # also: kernel_compare_opencl bench
+```
+Inputs: random raw images 1280×720 (BGR), 640×360 quads (RGGB, GRBG) and 34×18 for all
+variants, random RGBA (incl. alpha), floats in [-400, 400] with NaN/±inf, gradient offsets 1/2/5.
+78 outputs, all bit-exact:
+* raw2quad, quad2rgba, gradientDot, f2nv12 (Y and UV), NV12 Y planes: 0 differences.
+* NV12 UV planes (quad2nv12, rgba2nv12): 2–10 % of the UV pairs differ, **all** explained by
+  the write race; the reference itself is nondeterministic (two PoCL runs differ in up to
+  2620 / 230400 UV pairs). PoCL mostly ends with the pixel (1,1) of each 2×2 block (≈96 %),
+  sometimes (1,0) (row work-groups finishing out of order). CUDA deterministically writes UV
+  from the last pixel of the block, (1,1), i.e. the most frequent PoCL result.
+* CUDA results are deterministic (two runs identical).
+* `vision_processor` smoke test (OpenCV driver, BGR, no geometry): CUDA and `_opencl` both log
+  "Saved sample image"; the two `img/0.raw.jpg` files are byte-identical.
+
+Average time per call incl. launch + synchronisation (`kernel_compare bench`):
+
+| kernel      | PoCL 1280×720 BGR | CUDA  | PoCL 640×360 RGGB | CUDA  |
+|-------------|------------------:|------:|------------------:|------:|
+| raw2quad    | 1.44 ms | 0.13 ms | 0.66 ms | 0.05 ms |
+| quad2rgba   | 2.95 ms | 0.17 ms | 4.80 ms | 0.04 ms |
+| quad2nv12   | 3.26 ms | 0.09 ms | 4.97 ms | 0.05 ms |
+| rgba2nv12   | 1.56 ms | 0.20 ms | 0.57 ms | 0.03 ms |
+| gradientDot | 4.59 ms | 0.09 ms | 1.20 ms | 0.03 ms |
+| f2nv12      | 0.87 ms | 0.10 ms | 0.35 ms | 0.03 ms |
+
+## Findings / risks
+
+* On this Jetson the `_opencl` host views of U8/F32 images are wrong because of the
+  `CL_RGBA` workaround: `CLImageMap` builds 1-channel `cv::Mat`s / `rowPitch` over 4-channel
+  rows (`snapshotwriter` gradient/blob JPEGs, `CLImage::save` for F32, `blob_benchmark`'s
+  `circMap`). Kernel results are fine. The CUDA backend has correct host views, so end-to-end
+  comparisons must only compare kernel outputs / detections, not these debug images.
+* The smoke test only reaches "Saved sample image" if no geometry arrives on the network: on
+  the lab network another process publishes geometry on 224.5.23.2:10006, so use isolated ports
+  (`network: {vision_port: 10996, gc_port: 10993}`) in the test config.
+* FP contraction (see Phase 0) makes the float kernels the delicate part: every
+  `a*b + c` / `a - b*c` inside one OpenCL expression must become `__fmaf_rn` in the port.
+* `blobList`: besides the atomic order, which matches survive when more than `maxBlobs`
+  are found is nondeterministic in the reference.
+* Pinned zero-copy memory is fine for the streaming kernels; the neighbourhood-heavy blob
+  kernels may want device memory for intermediate images (Phase 7).
+
+## Remaining phases
+
+4. Float kernels: resampling (field2image with explicit fma, 80 B packed CameraModel with
+   static_assert), satHorizontal/satVertical (serial prefix sums, same order), satBlobCenter,
+   blobList (atomics, packed 22 B Match with byte-wise stores), blobScore/blobCenter (only used
+   by benchmarks); extend kernel_compare (match lists as multisets).
+5. End-to-end comparison: vision_processor / blob_benchmark / geometry_benchmark on recorded
+   videos (detections, blob lists), both backends.
+6. Hardening: driver paths not testable here (Spinnaker persistent maps, mvIMPACT copy
+   constructor), error paths, thread-safety review of concurrent maps.
+7. Performance: per-kernel `await` sync overhead, device memory for intermediates, CUDA
+   graphs / fewer syncs, CPU spin vs blocking sync (`cudaDeviceScheduleBlockingSync`).

@@ -191,4 +191,14 @@ if(WITH_CUDA)
     endforeach()
 
     install(TARGETS ${PROJECT_NAME} DESTINATION /usr/local/bin)
+
+    # Per-kernel comparison harness (cuda/tools/kernel_compare.cpp), built once per backend
+    add_executable(kernel_compare cuda/tools/kernel_compare.cpp "src/cl_kernels.S")
+    add_dependencies(kernel_compare AUTOGENERATE)
+    target_link_libraries(kernel_compare vp_cuda_backend)
+    if(WITH_OPENCL)
+        add_executable(kernel_compare_opencl cuda/tools/kernel_compare.cpp "src/opencl.cpp" "src/cl_kernels.S")
+        add_dependencies(kernel_compare_opencl AUTOGENERATE)
+        target_link_libraries(kernel_compare_opencl OpenCL::OpenCL)
+    endif()
 endif()
