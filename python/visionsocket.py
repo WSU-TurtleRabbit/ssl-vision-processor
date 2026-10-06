@@ -28,14 +28,14 @@ if not os.path.exists('python/proto/ssl_vision_wrapper_pb2.py'):
         subprocess.run([
             'protoc',
             '--python_out=python', '--pyi_out=python',
-            *[str(path) for path in pathlib.Path().rglob('proto/*.proto')]
+            *[str(path) for path in pathlib.Path('proto').glob('*.proto')]
         ], check=True)
     except subprocess.CalledProcessError:
         # Ubuntu 22.04 protoc can't do pyi
         subprocess.run([
             'protoc',
             '--python_out=python',
-            *[str(path) for path in pathlib.Path().rglob('proto/*.proto')]
+            *[str(path) for path in pathlib.Path('proto').glob('*.proto')]
         ], check=True)
 
 
