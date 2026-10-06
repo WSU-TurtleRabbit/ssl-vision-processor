@@ -71,7 +71,7 @@ Used by `quad2rgba.cl`, `quad2nv12.cl`, `resampling.cl`
 * `blobList`: `atomic_inc` order → match list order is nondeterministic; compare as
   multisets.
 * Struct layouts: `CLCameraModel` (Perspective.h) / `CameraModel` (resampling.cl) are
-  80 B packed; `CLMatch` (main.cpp) / `Match` (blobList.cl) are 22 B packed with
+  72 B packed (not 80 as assumed in the plan); `CLMatch` (main.cpp) / `Match` (blobList.cl) are 22 B packed with
   misaligned floats → byte-wise stores on the CUDA side, `static_assert` the layouts.
 
 ## Layout (Phases 1–3)
@@ -140,6 +140,33 @@ Average time per call incl. launch + synchronisation (`kernel_compare bench`):
 | gradientDot | 4.59 ms | 0.09 ms | 1.20 ms | 0.03 ms |
 | f2nv12      | 0.87 ms | 0.10 ms | 0.35 ms | 0.03 ms |
 
+## Phase 4 results (float kernels)
+
+Ported: resampling (BGR/RGGB/GRBG), satHorizontal, satVertical, satBlobCenter, blobList,
+blobScore (`cuda/kernels/resampling.cu`, `sat.cu`, `blobList.cu`). blobCenter.cl is not used by
+any target and stays unported.
+
+* `CLCameraModel` / `CameraModel` is **72 B** packed (2 int + 16 float), not 80 B as assumed
+  earlier; `Match` is 22 B. Both are `static_assert`ed (size and offsets); Match floats are
+  stored byte-wise.
+* Fused expressions written explicitly (`__fmaf_rn`), everything else `__f*_rn`:
+  `gid*fieldScale + offset`, `r0*x + r1*y + r2*z` → `fma(r2, z, fma(r0, x, r1*y))`,
+  `1 + d*(rx+ry)` → `fma(d, rx+ry, 1)`, `f*rayU + p` → `fma(f, rayU, p)`,
+  `neg - 2*center + pos` → `fma(-2, center, neg) + pos`. The stddev term
+  `s2 - s1*s1/n` is not fused (the product feeds a division).
+  Cross-check: replacing only the inner `fma(r0, x, r1*y)` by an unfused sum makes
+  60–165 resampled pixels per image differ by 1 and changes 1–2 blobList matches.
+* Harness: synthetic 1280×720 scene (noisy mat + 60 coloured discs) as BGR and as RGGB/GRBG
+  mosaic, two camera views ("inner" 600×340 px at 5 mm/px, "wide" 600×333 at 6 mm/px with
+  out-of-image coordinates and stronger distortion), full `rgba2blobCenter` call sequence, then
+  blobList with the production threshold (≈50–60 matches), a low threshold (3.6–4.5 k matches)
+  and an overflow run (maxMatches 16).
+* Result: all 132 outputs pass. Images (resampling RGBA, gradientDot, SAT, satBlobCenter,
+  blobScore): 0 bitwise differences (max ULP 0). blobList: counters identical, match multisets
+  identical; overflow runs store 16 matches that are all in the reference's full set.
+  Only difference found: NaN payloads (flat peaks give 0/0 in the sub-pixel interpolation:
+  aarch64 0x7fc00000, CUDA 0x7fffffff), canonicalised by the comparison.
+
 ## Findings / risks
 
 * On this Jetson the `_opencl` host views of U8/F32 images are wrong because of the
@@ -159,7 +186,7 @@ Average time per call incl. launch + synchronisation (`kernel_compare bench`):
 
 ## Remaining phases
 
-4. Float kernels: resampling (field2image with explicit fma, 80 B packed CameraModel with
+4. Float kernels: resampling (field2image with explicit fma, 72 B packed CameraModel with
    static_assert), satHorizontal/satVertical (serial prefix sums, same order), satBlobCenter,
    blobList (atomics, packed 22 B Match with byte-wise stores), blobScore/blobCenter (only used
    by benchmarks); extend kernel_compare (match lists as multisets).
