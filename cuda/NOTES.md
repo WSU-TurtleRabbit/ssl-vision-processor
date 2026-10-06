@@ -167,6 +167,36 @@ any target and stays unported.
   Only difference found: NaN payloads (flat peaks give 0/0 in the sub-pixel interpolation:
   aarch64 0x7fc00000, CUDA 0x7fffffff), canonicalised by the comparison.
 
+## Phase 5 results (end to end, real lab frame)
+
+Input: 1920×1080 MJPEG looping one real frame of the lab camera (foam mats without field lines,
+3 robots, orange balls), OpenCV driver resized to 768×432. Geometry from a fresh wrapper backend
+on isolated ports per run (`cuda/tools/e2e/run_e2e.sh`), calibration from 4 manual mat corners
+`[[3,370],[112,70],[570,61],[747,360]]`, `refinement: false`, camera height 2000 mm. With the lab
+geometry (4500×2230 field) the mat is mapped ~2× too large and no robots are found, so the main
+runs use field 3000×2000 (mat size estimated from tiles/robot diameter): 2 blue robots + 3 balls
+per frame. Detections are recorded from multicast and compared per frame
+(`compare_detections.py`).
+
+* Calibration ("Best model") is identical for both backends.
+* OpenCL vs CUDA: **499/499 frames bit-identical** (robot ids/team/position/orientation/
+  confidence, balls) in two independent pairs of runs, also with the 4500×2230 geometry
+  (balls only). OpenCL vs OpenCL and CUDA vs CUDA are identical as well.
+* Frame time (`BENCHMARK` build, time from frame read to detection, while another
+  vision_processor of the user was using ~4 cores):
+
+| | PoCL (OpenCL) | CUDA | speedup |
+|---|---:|---:|---:|
+| frame time mean (3000×2000 runs) | 37.2–41.0 ms | 3.3–3.4 ms | ~11–12× |
+| frame time median | 37.6–40.8 ms | 2.8 ms | ~14× |
+| GPU/CL kernel sum per frame | 35.9–39.3 ms | 0.93 ms | ~40× |
+| whole 500-frame run (wall) | 30–33 s | 8.7–9.2 s | ~3.5× (video decode + resize bound) |
+
+  Per kernel (CUDA, ms): resampling 0.096, satHorizontal 0.30, satVertical 0.30, raw2quad
+  0.05–0.06, blobList 0.06, gradientDot 0.036, satBlobCenter 0.04, quad2nv12 0.04.
+  PoCL: resampling 12.8–13.6, satBlobCenter 6.9–7.7, satVertical 6.0–6.2, gradientDot 3.5–4.1.
+  The serial SAT kernels (one thread per row/column) are now the largest GPU cost.
+
 ## Findings / risks
 
 * On this Jetson the `_opencl` host views of U8/F32 images are wrong because of the
@@ -186,13 +216,13 @@ any target and stays unported.
 
 ## Remaining phases
 
-4. Float kernels: resampling (field2image with explicit fma, 72 B packed CameraModel with
-   static_assert), satHorizontal/satVertical (serial prefix sums, same order), satBlobCenter,
-   blobList (atomics, packed 22 B Match with byte-wise stores), blobScore/blobCenter (only used
-   by benchmarks); extend kernel_compare (match lists as multisets).
-5. End-to-end comparison: vision_processor / blob_benchmark / geometry_benchmark on recorded
-   videos (detections, blob lists), both backends.
+Done: 0 (probes), 1 (build), 2 (façade runtime), 3 (integer kernels), 4 (float kernels),
+5 (end-to-end comparison on one real frame). blobCenter.cl (unused) is not ported.
+
 6. Hardening: driver paths not testable here (Spinnaker persistent maps, mvIMPACT copy
-   constructor), error paths, thread-safety review of concurrent maps.
-7. Performance: per-kernel `await` sync overhead, device memory for intermediates, CUDA
-   graphs / fewer syncs, CPU spin vs blocking sync (`cudaDeviceScheduleBlockingSync`).
+   constructor), Bayer input end to end, error paths, review of concurrent maps from the
+   snapshot/RTP threads, more varied real videos (moving robots, several frames).
+7. Performance: SAT as parallel scans (keeping the exact sequential summation order is
+   required for bit-exactness – e.g. one warp per row with a sequential carry, or accept ULP
+   differences), fewer synchronisations (`await` after every kernel), device memory for
+   intermediate images, blocking sync instead of spinning, CUDA graphs.
