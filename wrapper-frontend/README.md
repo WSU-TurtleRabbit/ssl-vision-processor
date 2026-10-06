@@ -56,8 +56,8 @@ console, Help, 🚨 Panic, Receipt, theme), the camera view on the left (icon
 mode buttons on the image, calibration chip, view strip raw · flat · gradient
 · blob beneath) and task tabs on the right (remembered in `localStorage`):
 
-- **Live** — detections (Team/ID · X · Y · Angle° · Conf, balls beneath,
-  image px as tooltip; keyed rows) and performance numbers + sparkline.
+- **Live** — performance numbers + sparkline, then detections (Team/ID · X ·
+  Y · Angle° · Conf, balls beneath, image px as tooltip; keyed rows).
 - **Cameras** — one block per camera: name, Pi status and the latest Pi
   error line (current camera run only), Start capture / Stop capture (two-step)
   / Restart camera / Show log, "Raw stream ↗" (the direct Pi feed in a new tab,

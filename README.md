@@ -1,4 +1,7 @@
 # Vision Processor
+
+> **▶️ How to start it on the Jetson: [00-START-HERE.md](00-START-HERE.md)**
+
 A replacement for the aging (ssl-vision)[https://github.com/RoboCup-SSL/ssl-vision].
 The shape based blob detector and decentralized software architecture is intended to
 minimize setup time and improve detection rates in uneven illumination conditions.

@@ -3,8 +3,8 @@
   import type { BallDetection, CameraMetrics, RobotDetection } from "./health";
   import { num } from "./health";
 
-  // Live tab: detections (Team/ID · X · Y · Angle° · Conf, balls beneath)
-  // and the performance numbers.
+  // Live tab: the performance numbers, then detections (Team/ID · X · Y ·
+  // Angle° · Conf, balls beneath).
 
   let {
     blue,
@@ -58,6 +58,11 @@
 </script>
 
 <section>
+  <h3>Performance</h3>
+  <PerformancePanel {metrics} {names} {uiFps} {wsRate} />
+</section>
+
+<section>
   <h3>Detections <span class="state" class:live>{stateText}</span></h3>
   <table>
     <thead>
@@ -99,11 +104,6 @@
       {/if}
     </tbody>
   </table>
-</section>
-
-<section>
-  <h3>Performance</h3>
-  <PerformancePanel {metrics} {names} {uiFps} {wsRate} />
 </section>
 
 <style>
