@@ -1,0 +1,15 @@
+[Unit]
+Description=On-demand MJPEG camera stream for vision_processor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=pi
+SupplementaryGroups=video
+ExecStart=/usr/bin/python3 /home/pi/camstream.py --device /dev/video0 --size 1920x1080 --fps 60 --port 8080
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,42 @@
+# Lab field config for the Raspberry Pi network camera.
+# Thresholds, tracking and colors use the vision_processor defaults; see config.yml for all options.
+cam_id: 0
+bot_heights_file: robot-heights.yml
+
+camera:
+  driver: OPENCV
+  # Raspberry Pi 4 + HD USB Camera streaming 1920x1080 MJPEG over Ethernet (pi_camera/camstream.py).
+  # The Pi switches the camera on when this connects and off when it disconnects.
+  # Resolution/fps are set on the Pi (camstream.service), not here.
+  path: http://192.168.210.149:8080/stream
+  output_width: 768
+  output_height: 432
+
+geometry:
+  camera_amount: 1
+  camera_height: 2000.0
+  # TODO recalibrate for this camera: run once without line_corners to get img/0.raw.jpg,
+  # then fill in the four line crossings in pixels (see README Setup step 5).
+  #line_corners:
+  #  - [0, 0]
+  #  - [0, 0]
+  #  - [0, 0]
+  #  - [0, 0]
+
+# No color section: the reference colors and automatic color learning
+# (reference_force 0.1, history_force 0.7, k-means bootstrap) use the defaults.
+
+network:
+  gc_ip: "224.5.23.1"
+  gc_port: 10003
+  vision_ip: "224.5.23.2"
+  vision_port: 10006
+
+stream:
+  # Software H.264 encoding costs CPU on the Jetson; the wrapper UI uses debug snapshots instead.
+  active: false
+
+debug:
+  # Set to true once line_corners are calibrated and the geometry publisher/wrapper runs.
+  wait_for_geometry: false
+  debug_images: true
