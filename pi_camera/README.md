@@ -207,6 +207,14 @@ curl -X POST -H "X-Camstream-Token: TOKEN" http://192.168.210.149:8080/control/c
 
 Same for `/control/open`, `/control/restart` and `/control/shutdown`. `GET /status` shows `"closed": true/false` and `"control": true` when a token is set.
 
+**Log without SSH.** The service keeps its last 1000 log lines (camera on/off, commands, ffmpeg and camera errors):
+
+```bash
+curl http://192.168.210.149:8080/log
+```
+
+The Jetson backend fetches this automatically into `logs/pi-camera-<host>.log` and shows it on the web page (Services → Pi camera → Show log). `journalctl -u camstream` on the Pi still has the full history.
+
 ## Troubleshooting
 
 ```mermaid

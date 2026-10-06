@@ -9,6 +9,9 @@ Endpoints:
   GET  /stream            multipart/x-mixed-replace MJPEG stream (one client at a time)
   GET  /status            JSON {"streaming": bool, "client": str|null, "closed": bool, "device": ..., "size": ..., "fps": ...,
                                 "ctrl": [...], "control": bool}
+  GET  /log?since=N       JSON {"lines": [[seq, unix_time, text], ...], "next": seq} - the service's own log
+                          (camera on/off, control commands, ffmpeg/camera errors), last 1000 lines kept in memory;
+                          pass the previous "next" as since= to fetch only new lines
   POST /control/restart   drop the current stream (camera off, the client reconnects -> camera on again)
   POST /control/close     camera off and refused to all clients (503) until /control/open or a reboot
   POST /control/open      allow streaming again
@@ -20,16 +23,37 @@ The token comes from --token or the CAMSTREAM_TOKEN environment variable; withou
 Only depends on python3 (stdlib), ffmpeg and v4l-utils (for --ctrl).
 """
 import argparse
+import collections
 import hmac
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 BOUNDARY = "ffmpeg"  # ffmpeg's mpjpeg muxer default boundary
+
+LOG_LINES: collections.deque = collections.deque(maxlen=1000)
+_log_lock = threading.Lock()
+_log_seq = 0
+
+
+def log(text: str) -> None:
+    """Print to stderr (journal) and keep the line for GET /log."""
+    global _log_seq
+    print(text, file=sys.stderr, flush=True)
+    with _log_lock:
+        _log_seq += 1
+        LOG_LINES.append((_log_seq, round(time.time(), 3), text))
+
+
+def log_since(since: int, limit: int = 1000) -> dict:
+    with _log_lock:
+        lines = [entry for entry in LOG_LINES if entry[0] > since][-limit:]
+        return {"lines": lines, "next": _log_seq}
 
 
 class CamStream:
@@ -49,12 +73,20 @@ class CamStream:
             "-c:v", "copy", "-f", "mpjpeg", "pipe:1",
         ]
 
+    @staticmethod
+    def forward_stderr(proc: subprocess.Popen) -> None:
+        # ffmpeg's own warnings/errors (camera busy, unsupported size, ...) into our log
+        for raw in proc.stderr:
+            text = raw.decode(errors="replace").rstrip()
+            if text:
+                log(f"ffmpeg: {text}")
+
     def apply_controls(self) -> None:
         # UVC cameras may reset controls when reopened, so apply them before every stream start
         for ctrl in self.args.ctrl:
             result = subprocess.run(["v4l2-ctl", "-d", self.args.device, f"--set-ctrl={ctrl}"], capture_output=True, text=True)
             if result.returncode != 0:
-                print(f"failed to set {ctrl}: {result.stderr.strip()}", file=sys.stderr, flush=True)
+                log(f"failed to set {ctrl}: {result.stderr.strip()}")
 
     def drop_stream(self) -> bool:
         """Stop the running ffmpeg (if any); the stream handler then finishes and releases the camera."""
@@ -75,7 +107,10 @@ class CamStream:
 def make_handler(cam: CamStream):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
-            print(f"{self.client_address[0]} {fmt % args}", file=sys.stderr, flush=True)
+            message = fmt % args
+            if "/log" in message or "/status" in message:
+                return  # polled every few seconds, would drown the log
+            log(f"{self.client_address[0]} {message}")
 
         def send_text(self, code: int, body: str, ctype: str = "text/plain") -> None:
             data = body.encode()
@@ -92,6 +127,9 @@ def make_handler(cam: CamStream):
             path = urlsplit(self.path).path
             if path == "/status":
                 self.send_json(200, cam.status())
+            elif path == "/log":
+                since = (parse_qs(urlsplit(self.path).query).get("since") or ["0"])[0]
+                self.send_json(200, log_since(int(since) if since.isdigit() else 0))
             elif path in ("/", "/stream"):
                 self.stream()
             else:
@@ -105,7 +143,7 @@ def make_handler(cam: CamStream):
             if not self.authorized(url.query):
                 return
             command = url.path[len("/control/"):]
-            print(f"control '{command}' from {self.client_address[0]}", file=sys.stderr, flush=True)
+            log(f"control '{command}' from {self.client_address[0]}")
             if command == "restart":
                 dropped = cam.drop_stream()
                 self.send_json(200, {"ok": True, "dropped_stream": dropped, "closed": cam.closed})
@@ -146,13 +184,15 @@ def make_handler(cam: CamStream):
             proc = None
             try:
                 cam.client = self.client_address[0]
-                print(f"camera ON for {cam.client}", file=sys.stderr, flush=True)
+                log(f"camera ON for {cam.client}")
                 cam.apply_controls()
-                proc = subprocess.Popen(cam.ffmpeg_cmd(), stdout=subprocess.PIPE)
+                proc = subprocess.Popen(cam.ffmpeg_cmd(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 cam.proc = proc
+                threading.Thread(target=cam.forward_stderr, args=(proc,), daemon=True).start()
                 first = proc.stdout.read1(65536)
                 if not first:
-                    self.send_text(503, "camera failed to start, see: journalctl -u camstream\n")
+                    log("camera failed to start (see the ffmpeg lines above)")
+                    self.send_text(503, "camera failed to start, see GET /log or: journalctl -u camstream\n")
                     return
                 self.send_response(200)
                 self.send_header("Content-Type", f"multipart/x-mixed-replace;boundary={BOUNDARY}")
@@ -174,7 +214,7 @@ def make_handler(cam: CamStream):
                         proc.wait(timeout=2)
                     except subprocess.TimeoutExpired:
                         proc.kill()
-                print(f"camera OFF ({cam.client} disconnected)", file=sys.stderr, flush=True)
+                log(f"camera OFF ({cam.client} disconnected)")
                 cam.client = None
                 cam.lock.release()
 
@@ -197,7 +237,7 @@ def main() -> None:
     server = ThreadingHTTPServer((args.host, args.port), make_handler(CamStream(args)))
     server.daemon_threads = True
     control = "enabled" if args.token else "disabled (no token)"
-    print(f"camstream on http://{args.host}:{args.port}/stream ({args.device} {args.size}@{args.fps}), remote control {control}", file=sys.stderr, flush=True)
+    log(f"camstream on http://{args.host}:{args.port}/stream ({args.device} {args.size}@{args.fps}), remote control {control}")
     server.serve_forever()
 
 
