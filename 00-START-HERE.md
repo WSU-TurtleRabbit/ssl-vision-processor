@@ -31,6 +31,8 @@ After changing anything in `wrapper-frontend/`, rebuild it once, then reload the
 cd wrapper-frontend && PATH=$HOME/.local/node/bin:$PATH npm run build
 ```
 
+Build says `failed to resolve import "…"`? Run `npm ci` first, then build again. See [Troubleshooting → Frontend](docs/troubleshooting.md#frontend).
+
 ## Stop
 
 **Ctrl+C** in each terminal.

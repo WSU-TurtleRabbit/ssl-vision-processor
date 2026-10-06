@@ -18,6 +18,16 @@ Check it: `clinfo -l` must list `Portable Computing Language`.
 cmake -B build . && make -j12 -C build vision_processor
 ```
 
+On a Jetson this builds the **CUDA** version (the GPU does the image work). CMake finds the rest by itself:
+
+- `nvcc` in `/usr/local/cuda`. The CUDA build is used whenever it's there.
+- `g++-10` on Ubuntu 20.04 (JetPack 5), whose default gcc 9 is too old. `sudo apt install g++-10` if it's missing.
+- The ZED SDK in `/usr/local/zed`. With it, the `ZED` camera driver is built in. The log then says `ZED SDK found`.
+
+Check it: the first log line of `vision_processor` must say `Using device: CUDA … Orin`.
+The ZED Box's own config is `config-zed-lab.yml` (`driver: ZED`, automatic exposure and white balance).
+The old CPU-only OpenCL build is still available with `cmake -B build -DWITH_CUDA=OFF .`.
+
 ## 3. Backend tools (Python)
 
 - `uv` lives in `~/.local/bin`, installed with `curl -LsSf https://astral.sh/uv/install.sh | sh`.

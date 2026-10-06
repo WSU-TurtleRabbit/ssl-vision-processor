@@ -66,4 +66,22 @@ flowchart TD
     B -->|"Colour panel: 'not publishing'"| B5["Rebuild + restart vision_processor"]
 ```
 
+### `npm run build` fails with `failed to resolve import "…"`
+
+Example: `Rolldown failed to resolve import "dompurify"`.
+
+- **Cause:** `package.json` lists a package that isn't in `node_modules` yet. This happens when the packages were installed before someone added a new one, usually after a pull or a branch switch. The code is fine.
+- **Fix:** reinstall exactly what `package-lock.json` lists, then build:
+
+```bash
+cd wrapper-frontend && PATH=$HOME/.local/node/bin:$PATH npm ci && npm run build
+```
+
+### npm says `N vulnerabilities (… high)`
+
+- **Not an error.** The build still worked. npm checks every installed package against a list of known security issues.
+- **Most are build tools** (vite, postcss, …) that run only while building and never end up in the page. To check what actually ships in the page, run `npm audit --omit=dev`.
+- **Optional fix:** `npm audit fix` updates them within safe versions. Rebuild afterwards, and commit `package-lock.json` if it still builds.
+- **Don't run `npm audit fix --force`.** It jumps to new major versions and can break the build.
+
 Back: [🏠 Home](README.md)
