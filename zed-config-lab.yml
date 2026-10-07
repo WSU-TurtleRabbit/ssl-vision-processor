@@ -14,14 +14,14 @@ camera:
   # unchanged vs 30 FPS, and cuts capture->sent latency 3.9 -> 2.7 ms (~4 ms/frame, 0.7 CPU core).
   fps: 60
   # Processing size, picked in the web page (System tab -> Processing -> Quality), which also
-  # rescales the field corners and restarts vision_processor. All three hold 60 FPS
-  # (docs/zed/benchmarks.md, 2026-10-06 sweep): low = lowest delay and CPU, for unattended
-  # running; medium = a bit more robot confidence; max = most confident, ~25 % more CPU.
-  # 1280x720 is NOT offered: it drops below 60 FPS (14 ms/frame).
+  # rescales the field corners and restarts vision_processor. Both hold 60 FPS
+  # (docs/zed/benchmarks.md, 5-round sweep 2026-10-06): low = lowest delay and CPU (3.9 ms,
+  # 73 % of a core), for unattended running; max = most confident robots (0.81 vs 0.65),
+  # ~1 ms more delay. 1280x720 is NOT offered: it failed to calibrate / dropped below 60 FPS.
   quality: low
-  quality_presets: {low: [832, 468], medium: [896, 504], max: [1216, 684]}
-  output_width: 832
-  output_height: 468
+  quality_presets: {low: [768, 432], max: [1216, 684]}
+  output_width: 768
+  output_height: 432
   # false = the raw left image, geometrically the same as the old V4L2 left-half crop, so the
   # line_corners below stay valid. true = the SDK's undistorted image (needs new corners).
   rectify: false
@@ -37,26 +37,26 @@ geometry:
   camera_height: 2000.0
   # Centers of the tape X markers: the absolute outside boundary edge.
   outer_line_corners:
-    - [691.167, 54.167]
-    - [692.25, 397.583]
-    - [57.417, 400.833]
-    - [62.833, 63.917]
+    - [638.0, 50.0]
+    - [639.0, 367.0]
+    - [53.0, 370.0]
+    - [58.0, 59.0]
   # Detected inner white-line corners in the 768x432 calibrated frame.
   line_corners:
-    - [691.167, 54.167]
-    - [692.25, 397.583]
-    - [57.417, 400.833]
-    - [62.833, 63.917]
+    - [638.0, 50.0]
+    - [639.0, 367.0]
+    - [53.0, 370.0]
+    - [58.0, 59.0]
   refinement: false
   field_line_threshold: 35
   min_line_segment_length: 80.0
   max_line_segment_offset: 10.0
   max_line_segment_angle: 3.0
   distortion_lines:
-    - [[96.633, 79.625], [240.717, 77.458], [373.967, 74.208], [519.133, 74.208], [652.383, 78.542]]
-    - [[657.8, 82.875], [665.383, 145.708], [664.3, 230.208], [662.133, 317.958], [659.967, 379.708]]
-    - [[652.383, 378.625], [614.467, 380.792], [466.05, 382.958], [367.467, 379.708], [261.3, 375.375], [92.3, 375.375]]
-    - [[89.05, 367.792], [83.633, 303.875], [85.8, 224.792], [91.217, 143.542], [94.467, 88.292]]
+    - [[89.2, 73.5], [222.2, 71.5], [345.2, 68.5], [479.2, 68.5], [602.2, 72.5]]
+    - [[607.2, 76.5], [614.2, 134.5], [613.2, 212.5], [611.2, 293.5], [609.2, 350.5]]
+    - [[602.2, 349.5], [567.2, 351.5], [430.2, 353.5], [339.2, 350.5], [241.2, 346.5], [85.2, 346.5]]
+    - [[82.2, 339.5], [77.2, 280.5], [79.2, 207.5], [84.2, 132.5], [87.2, 81.5]]
   line_corners_include_boundary: true
 
 thresholds:

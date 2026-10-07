@@ -7,7 +7,7 @@
 1. **New camera driver `ZED`.** It reads the ZED 2i through the ZED SDK. The image is shrunk on the GPU and handed to the detector without a CPU copy. Config: `zed-config-lab.yml`.
 2. **CUDA by default.** On a Jetson the build uses the GPU (CUDA). CMake picks `g++-10` on Ubuntu 20.04 and finds the ZED SDK by itself.
 3. **60 fps at 768×432, with automatic exposure, gain and white balance.** Measured: 2 robots and the ball in every frame, ~4 ms per frame, ~2.7 ms from camera to network.
-4. **Quality presets** low / medium / max (832×468, 896×504, 1216×684) in the web page, low by default. See [zed/camera.md](zed/camera.md#quality-presets-processing-size).
+4. **Quality presets** in the web page: low 768×432 (default) and max 1216×684. They were briefly low / medium / max = 832 / 896 / 1216, until repeat benchmarks showed 832×468 was the slowest. See [zed/camera.md](zed/camera.md#quality-presets-processing-size).
 5. **Docs split by setup:** [pi/](pi/start-stop.md) and [zed/](zed/start-stop.md), with the shared pages labelled 📷 / 🎥.
 
 

@@ -7,7 +7,7 @@ What we decided, why, and what would make us look again. Newest first. **Before 
 | Date | Decision | Status |
 |---|---|---|
 | 2026-10-06 | [One camera: use only the ZED's left lens, not "2 cameras"](#one-camera-not-two) | ✅ decided |
-| 2026-10-06 | [Quality presets: 832×468 by default, 896×504 and 1216×684 on demand](#quality-presets) | ✅ in use |
+| 2026-10-07 | [Quality presets: low 768×432 (default) and max 1216×684](#quality-presets) | ✅ in use |
 | 2026-10-06 | [60 fps](#60-fps-at-768432) | ✅ in use |
 | 2026-10-06 | [Read the ZED with the ZED SDK, not as a webcam](#zed-sdk-instead-of-webcam-mode) | ✅ in use |
 | 2026-10-06 | [Automatic exposure and white balance, with adapting colours](#automatic-exposure-with-adapting-colours) | ✅ in use |
@@ -40,13 +40,22 @@ What we decided, why, and what would make us look again. Newest first. **Before 
 
 ## Quality presets
 
-**Decision:** three processing sizes, switched in the web page. `low` 832×468 is the default, because the system mostly runs unattended. `medium` is 896×504 and `max` is 1216×684.
+**Decision (2026-10-07):** two processing sizes, switched in the web page:
+- `low` 768×432, the default, because the system mostly runs unattended.
+- `max` 1216×684.
 
-**Why:** the 2026-10-06 sweep ([benchmarks.md](benchmarks.md)). Every size up to 1216×684 holds 60 fps; 832×468 had the lowest delay (3.4 ms) and CPU (66 %), and 1216×684 the highest robot confidence (0.82). 1280×720 dropped below 60 fps, so it isn't offered.
+**Why:** the 5-round sweep and the 2-round confirmation ([benchmarks.md](benchmarks.md)):
+- **768×432 had the lowest delay and CPU** (3.9 ms, 73 %) in both sessions.
+- **1216×684 had the highest robot confidence** (0.81 vs 0.65).
+- **Every size up to 1216×684 holds 60 fps.**
+
+**What changed from the first version (2026-10-06):**
+- **`low` was 832×468,** picked from a single-run sweep that turned out misleading. Repeated, 832×468 was always the slowest (~2 ms more).
+- **A `medium` 896×504 was dropped.** It was never reliably faster than 1216×684, and less confident.
 
 **How:** one config file, `camera.quality_presets`, not three files: three copies of the corners and colours would drift apart. Switching rescales the pixel corners (exact, because the sensor mode doesn't change), clears the calibration and restarts `vision_processor` (`/api/camera/quality`).
 
-**Look again if:** repeat runs or a moving-ball test reorder the sizes. Each size was measured once, on a still scene.
+**Look again if:** a moving-ball test reorders the sizes. All tests so far were on a still scene.
 
 ## 60 fps at 768×432
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import difflib
 import logging
 import signal
 from logging.handlers import RotatingFileHandler
@@ -99,6 +100,15 @@ async def _main() -> None:
         help="start vision_processor together with the backend",
     )
     args = parser.parse_args()
+    if not args.vision_config.is_file():
+        # Without it vision_processor crash-loops with only "bad file" in its log
+        similar = difflib.get_close_matches(
+            args.vision_config.name,
+            [p.name for p in args.vision_config.parent.glob("*.yml")],
+            n=3,
+        )
+        hint = f" Did you mean: {', '.join(similar)}?" if similar else ""
+        parser.error(f"--vision-config {args.vision_config} does not exist.{hint}")
 
     # SIGTERM (systemd, kill) cancels the main task like Ctrl+C does, so the
     # cleanup below runs and the managed vision_processor is stopped too.

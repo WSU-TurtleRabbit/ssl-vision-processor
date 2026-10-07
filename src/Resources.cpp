@@ -68,8 +68,19 @@ static YAML::Node getOptional(const YAML::Node& node) {
 	return node.IsDefined() ? node : YAML::Node();
 }
 
+// YAML::LoadFile's own error is just "bad file", without the path
+static YAML::Node loadYaml(const std::string& path, const char* what) {
+	try {
+		return YAML::LoadFile(path);
+	} catch(const YAML::BadFile&) {
+		FATAL("Could not open the " << what << " '" << path << "' (missing, or wrong folder/name?)");
+	} catch(const YAML::ParserException& e) {
+		FATAL("The " << what << " '" << path << "' is not valid YAML: " << e.what());
+	}
+}
+
 Resources::Resources(const std::string& configPath) : fieldReference(), configPath(configPath) {
-	YAML::Node config = YAML::LoadFile(configPath);
+	YAML::Node config = loadYaml(configPath, "config file");
 	struct stat st{};
 	if(stat(configPath.c_str(), &st) == 0)
 		configMtime = (int64_t)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec;
@@ -113,7 +124,7 @@ Resources::Resources(const std::string& configPath) : fieldReference(), configPa
 	bool waitForGeometry = debug["wait_for_geometry"].as<bool>(false);
 
 	YAML::Node network = getOptional(config["network"]);
-	gcSocket = std::make_shared<GCSocket>(network["gc_ip"].as<std::string>("224.5.23.1"), network["gc_port"].as<int>(10003), YAML::LoadFile(config["bot_heights_file"].as<std::string>("robot-heights.yml")).as<std::map<std::string, double>>());
+	gcSocket = std::make_shared<GCSocket>(network["gc_ip"].as<std::string>("224.5.23.1"), network["gc_port"].as<int>(10003), loadYaml(config["bot_heights_file"].as<std::string>("robot-heights.yml"), "robot heights file (bot_heights_file)").as<std::map<std::string, double>>());
 	socket = std::make_shared<VisionSocket>(network["vision_ip"].as<std::string>("224.5.23.2"), network["vision_port"].as<int>(10006), camId, gcSocket->defaultBotHeight);
 	perspective = std::make_shared<Perspective>(socket, camId, geometryTolerance);
 

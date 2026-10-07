@@ -63,8 +63,7 @@
   // rescales the field corners and restarts vision_processor (POST /api/camera/quality).
   const QUALITY_HINTS: Record<string, string> = {
     low: "lowest delay and CPU, for unattended running",
-    medium: "a bit more robot confidence",
-    max: "most confident, ~25 % more CPU",
+    max: "most confident robots, ~1 ms more delay",
   };
   let quality = $state<{
     presets: Record<string, [number, number]>;

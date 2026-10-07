@@ -53,7 +53,8 @@ Still unsure whether the camera itself works? Stop `vision_processor` and run `/
 | `status: waiting for field geometry` | Backend not running → [Fix C](#fix-c-backend) |
 | `status: detecting ... 0 ... robots` | Not calibrated / robots outside the field → [Fix E](#fix-e-no-robots) |
 | `Saved sample image` then stops | Not calibrated yet → [calibration.md](../calibration.md) |
-| `bad file: robot-heights.yml` | You're in the wrong folder. `cd ~/ssl-software/TIGERS/vision-processor` |
+| `Could not open the config file 'config-zed-lab.yml'` (or just `bad file`) | Old file name. The config is now **`zed-config-lab.yml`**. Ctrl+C the backend and start it again with the command in [Fix C](#fix-c-backend). |
+| `Could not open the robot heights file` / `bad file: robot-heights.yml` | You're in the wrong folder. `cd ~/ssl-software/TIGERS/vision-processor` |
 | fps well under 60 | See [camera.md](camera.md#frame-rate-and-resolution) |
 
 More: [troubleshooting → vision_processor](../troubleshooting.md#vision_processor)
@@ -69,6 +70,7 @@ PATH=$HOME/.local/bin:$PATH ./start_wrapper.sh geometry-wrapper-lab-divB.yml --v
 | `uv: command not found` | Use the line above exactly (it adds `uv` to the PATH) |
 | `address already in use` | One is already running: `ss -ltnp \| grep 8765` shows its PID, stop it, start again |
 | `KeyError: 'optional_field_lines'` | Wrong field file: use `geometry-wrapper-lab-divB.yml` |
+| `--vision-config … does not exist. Did you mean: …` | Typo or old name: use `zed-config-lab.yml` |
 
 More: [troubleshooting → backend](../troubleshooting.md#backend)
 

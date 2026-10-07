@@ -28,6 +28,8 @@ Mean of 5 runs (min–max):
 | 1216×684 | 5.7 (5.4–6.0) | 4.8 ms (4.6–5.2) | 81 (80–82) | 0.81 (0.80–0.82) | 60.0 | 100 |
 | 1280×720 | calibration failed in all 5 rounds, 0 detections | | | | | |
 
+**Presets chosen from this (2026-10-07):** `low` = 768×432, `max` = 1216×684.
+
 **What it shows:**
 - **768×432 is the fastest and cheapest** (3.9 ms delay, 73 % CPU). This agrees with the 2-round confirmation.
 - **832×468 is the slowest** (5.7 ms), again. It has never been fast once warm-up is out of the way.
@@ -69,8 +71,8 @@ Mean of 2 runs (min–max):
 | size | detections/s | ms per frame | CPU % (of 1 core) | robots per frame | robot confidence | ball % | ball confidence | camera → network delay | preset |
 |---|---|---|---|---|---|---|---|---|---|
 | 768×432 | 60.0 | 6.1 | 74 | 2.01 | 0.659 | 100 | 0.996 | 4.7 ms | |
-| **832×468** | 59.8 | 4.5 | **66** | 2.00 | 0.670 | 100 | 0.988 | **3.4 ms** | `low` (default) |
-| **896×504** | 59.8 | **4.4** | 72 | 2.00 | 0.774 | 100 | 0.953 | 3.8 ms | `medium` |
+| **832×468** | 59.8 | 4.5 | **66** | 2.00 | 0.670 | 100 | 0.988 | **3.4 ms** | (`low` until 2026-10-07) |
+| **896×504** | 59.8 | **4.4** | 72 | 2.00 | 0.774 | 100 | 0.953 | 3.8 ms | (`medium` until 2026-10-07) |
 | 960×540 | 60.0 | 4.6 | 73 | 2.00 | 0.599 | 100 | 0.894 | 3.6 ms | |
 | 1024×576 | 60.0 | 5.4 | 82 | 2.00 | 0.674 | 100 | 0.906 | 4.5 ms | |
 | 1088×612 | 60.0 | 5.8 | 83 | 2.00 | 0.694 | 100 | 0.950 | 5.0 ms | |
@@ -82,7 +84,7 @@ Mean of 2 runs (min–max):
 - **Every size up to 1216×684 holds 60 fps** and finds both robots and the ball in every frame.
 - **1280×720 falls off a cliff:** 14 ms per frame, and it can't hold 60 fps. Why isn't known yet; it isn't a gradual slowdown.
 - ~~832×468 has the lowest delay and CPU~~: **not confirmed.** In the repeat runs above it was the slowest of the four.
-- **896×504 is almost as quick, with clearly higher robot confidence:** the `medium` preset.
+- **896×504 is almost as quick, with clearly higher robot confidence.** It was briefly the `medium` preset; dropped, because repeat runs showed it no faster than 1216×684.
 - **1216×684 has the highest robot confidence,** for about 1 ms more delay and ~25 % more CPU: the `max` preset.
 
 **Be careful with:**

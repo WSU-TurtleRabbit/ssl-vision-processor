@@ -15,8 +15,8 @@ All settings are in the `camera:` section of **`zed-config-lab.yml`**. After cha
 | `width` / `height` | `1280` / `720` | Sensor mode per lens; `height` picks it. ZED 2i: 376 (up to 100 fps), 720 (60), 1080 (30), 1242 (15). |
 | `fps` | `60` | Frames per second, up to the mode's limit above. |
 | `quality` | `low` | Which processing-size preset is active. **Switch it in the web page** (next section), not by hand. |
-| `quality_presets` | low / medium / max | The three sizes on offer |
-| `output_width` / `output_height` | `832` / `468` | The size `vision_processor` actually works on. Set by `quality`. |
+| `quality_presets` | low / max | The two sizes on offer |
+| `output_width` / `output_height` | `768` / `432` | The size `vision_processor` actually works on. Set by `quality`. |
 | `rectify` | `false` | `false`: the raw left picture. `true`: the SDK straightens the lens bending, but then the field corners must be clicked again. |
 | `exposure` | `0.0` | `0` = automatic. Otherwise milliseconds. |
 | `gain` | `0.0` | `0` = automatic. Otherwise 0–100. |
@@ -30,11 +30,10 @@ All settings are in the `camera:` section of **`zed-config-lab.yml`**. After cha
 
 | Preset | Size | Use it when | Delay | CPU (of 1 core) | Robot confidence |
 |---|---|---|---|---|---|
-| **`low`** (default) | 832×468 | **unattended running**: lowest delay and CPU | 3.4 ms | 66 % | 0.67 |
-| `medium` | 896×504 | someone is watching and wants a bit more certainty | 3.8 ms | 72 % | 0.77 |
-| `max` | 1216×684 | tricky light or a match: most confident | 4.5 ms | 83 % | 0.82 |
+| **`low`** (default) | 768×432 | **unattended running**: lowest delay and CPU | 3.9 ms | 73 % | 0.65 |
+| `max` | 1216×684 | tricky light, or a match where every robot counts: most confident | 4.8 ms | 81 % | 0.81 |
 
-All three hold 60 fps and found both robots and the ball in every frame ([📊 benchmarks.md](benchmarks.md)). 1280×720 isn't offered: it can't keep 60 fps.
+Both hold 60 fps and found both robots and the ball in every frame. The numbers are the 5-round averages in [📊 benchmarks.md](benchmarks.md). 1280×720 isn't offered: it failed to calibrate or dropped below 60 fps.
 
 ## Frame rate and resolution
 
